@@ -127,7 +127,7 @@ I ask that if you have unconstructive feedback regarding the usage of AI while d
 
 | # | Problem under CE | Fix |
 |---|------------------|-----|
-| 1 | SS pickup checks ignore CE **bulk** (weight is already CE-aware via CE's `MassUtility.Capacity` patch) | Bulk check appended to `StatCalculator.CanPickupSidearmType` (also gates NPC sidearm generation) |
+| 1 | SS decides what may be carried as a sidearm without CE **bulk** (weight is already CE-aware via CE's `MassUtility.Capacity` patch), and its own retrieval checks neither | Bulk check appended to `StatCalculator.CanPickupSidearmType` (also gates NPC sidearm generation); retrievals CE has no room for are cancelled in `JobGiver_RetrieveWeapon` |
 | 2 | SS ranks ranged weapons with vanilla stats - meaningless for CE guns | CE-model DPS (ammo projectile damage, burst, reload amortization) with SS's speed-bias semantics preserved |
 | 3 | SS can auto-switch a pawn to a gun with **no ammo** | SS's own selection is re-run with dry guns hidden, so its whole filter chain (including its rules for other mods' shields and dual-wielding) picks the fallback |
 | 4 | SS-generated NPC sidearms spawn with empty mags, no spare ammo | Post-generation: magazines filled, spare mags added within CE inventory capacity (count from CE's `LoadoutPropertiesExtension` when present) |

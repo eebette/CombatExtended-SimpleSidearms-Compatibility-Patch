@@ -9,7 +9,7 @@
     <description>Makes Combat Extended and Simple Sidearms play nicely together.
 
 Covers:
-- Sidearm pickup limits respect CE bulk (not just weight)
+- Sidearm pickup limits respect CE bulk (not just weight), including the weapons Simple Sidearms fetches on its own
 - Weapon scoring uses CE stats (magazine, reload time, ammo damage)
 - Pawns never auto-switch to guns with no ammo
 - NPC-generated sidearms spawn loaded, with spare ammo in inventory
