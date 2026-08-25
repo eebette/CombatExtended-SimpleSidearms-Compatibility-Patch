@@ -52,6 +52,16 @@ prior findings / test integrity.
 - **Ask for a verified-clean list.** It stops the next review re-deriving the same ground.
 - **Do not let a reviewer audit its own suggestion.** Fresh agents, every round.
 
+**Reviewing a branch against its base:** give one agent `git diff base..branch` as its
+primary artefact, not the end state. Three reviews of one rewrite missed a deleted behaviour
+(an exclusion-lifecycle prune) because nothing in the *result* points at code that stopped
+existing — only the diff shows a removal.
+
+**Check the premise behind a severity, not just the finding.** One reviewer rated a missing
+save-migration "high" by modelling a released mod with users; the mod was unreleased and the
+migration it prompted guarded an empty set — and reintroduced the node it migrated away from.
+A finding can be technically correct and still rest on a situation that does not exist.
+
 ## Verifying before filing
 
 Read the load-bearing claims yourself, especially anything critical or anything that
