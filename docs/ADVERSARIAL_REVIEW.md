@@ -10,8 +10,8 @@ often enough that an unverified finding is a hypothesis, not a defect.
 ```
 CONSTRAINT — no mirrored upstream logic. This binds your RECOMMENDATIONS as well as your
 report. Mirroring CE/SS logic locally is a design anti-pattern (a fork that drifts and
-breaks on upstream change), and SS additionally has no published license, so its source
-stays out of this repo and out of public artifacts.
+breaks on upstream change). Licensing is handled
+pragmatically (see CONTRIBUTING); the rule here is about design, not law.
 - Cite file:line and describe upstream behaviour; do not paste their source into findings.
 - Do not recommend reimplementing CE/SS logic here — transcribed predicates, formulas and
   constants are mirrors however short. Propose instead: composing the public API, vanilla
