@@ -8,20 +8,18 @@ often enough that an unverified finding is a hypothesis, not a defect.
 ## The constraint block — put this in every brief, verbatim
 
 ```
-HARD CONSTRAINT — licensing. Simple Sidearms has no published license and Combat
-Extended is CC BY-NC-SA, incompatible with this project's MIT license. The decompiled
-sources are behavioural reference only.
-
-This binds your RECOMMENDATIONS as well as your report:
-- Do not quote or reproduce CE/SS source in your findings. Cite file:line and describe
-  behaviour in your own words.
-- Do not recommend reimplementing CE/SS logic in this repository. Transcribed
-  predicates, formulas and constants count as copying, however short.
-- When upstream exposes no entry point for something this mod needs, propose one of:
-  composing the public API that does exist, using vanilla RimWorld's API, an upstream
-  feature request, or an explicitly documented decision not to enforce that rule.
-- Flag any code in this repository that appears to be transcribed from upstream as a
-  finding in its own right, at high severity, regardless of whether it is correct.
+CONSTRAINT — no mirrored upstream logic. This binds your RECOMMENDATIONS as well as your
+report. Mirroring CE/SS logic locally is a design anti-pattern (a fork that drifts and
+breaks on upstream change), and SS additionally has no published license, so its source
+stays out of this repo and out of public artifacts.
+- Cite file:line and describe upstream behaviour; do not paste their source into findings.
+- Do not recommend reimplementing CE/SS logic here — transcribed predicates, formulas and
+  constants are mirrors however short. Propose instead: composing the public API, vanilla
+  RimWorld's API, an upstream feature request, or an explicitly documented decision not to
+  enforce that rule. Publicized private members count as calls.
+- Flag code in this repository that appears mirrored from upstream as a finding in its own
+  right — a DESIGN finding, severity rated by fragility and drift risk, regardless of
+  whether the code is currently correct.
 ```
 
 Omitting the last two lines is how a two-line pacifist check got lifted out of SS's
