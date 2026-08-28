@@ -1,7 +1,9 @@
 using System;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
+using SimpleSidearms.rimworld;
 using Verse;
 
 namespace CESimpleSidearmsCompat.Patches
@@ -48,12 +50,49 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
-            if (CompatUtil.SSRemembers(pawn, dropThing))
+            if (!CompatUtil.SSRemembers(pawn, dropThing))
+            {
+                return;
+            }
+            // Count-aware (issue #23): SS memory is per type, so an unconditional veto made
+            // every spare copy of a remembered pair undroppable — a Knife x1 loadout row
+            // plus two battlefield pickups meant three knives forever. The exemption
+            // protects as many instances as SS's memory (a multiset — one entry per copy)
+            // or the CE loadout row asks for, whichever is more, and lets CE trim the rest.
+            int wanted = ProtectedCount(pawn, dropThing);
+            if (CarriedCount(pawn, dropThing) <= wanted)
             {
                 __result = false;
                 dropThing = null;
                 dropCount = 0;
             }
+        }
+
+        private static int ProtectedCount(Pawn pawn, Thing thing)
+        {
+            var pair = new ThingDefStuffDefPair(thing.def, thing.Stuff);
+            int remembered = CompSidearmMemory.GetMemoryCompForPawn(pawn, false)?
+                .RememberedWeapons?.Count(p => p == pair) ?? 0;
+            // CE loadout slots carry no stuff, so a def-wide row conservatively covers
+            // every stuff variant — the same def-level matching CE's own tracker uses.
+            int inLoadout = pawn.GetLoadout()?.Slots?
+                .Where(slot => slot.thingDef == thing.def)
+                .Sum(slot => slot.count) ?? 0;
+            return Math.Max(remembered, inLoadout);
+        }
+
+        private static int CarriedCount(Pawn pawn, Thing thing)
+        {
+            var pair = new ThingDefStuffDefPair(thing.def, thing.Stuff);
+            int count = pawn.inventory?.innerContainer?
+                .Where(t => t.def == pair.thing && t.Stuff == pair.stuff)
+                .Sum(t => t.stackCount) ?? 0;
+            ThingWithComps primary = pawn.equipment?.Primary;
+            if (primary != null && primary.def == pair.thing && primary.Stuff == pair.stuff)
+            {
+                count++;
+            }
+            return count;
         }
     }
 
@@ -86,6 +125,11 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
+            // Deliberately NOT count-aware, unlike the inventory exemption above: whatever
+            // the counts, the equipped copy is the instance SS wants in the rotation, and
+            // the inventory side already trims the spares — protecting the one in hand is
+            // what makes the two converge on "carry exactly what was asked" instead of CE
+            // stripping the primary while duplicates sit in the backpack.
             if (CompatUtil.SSRemembers(pawn, dropEquipment))
             {
                 __result = false;

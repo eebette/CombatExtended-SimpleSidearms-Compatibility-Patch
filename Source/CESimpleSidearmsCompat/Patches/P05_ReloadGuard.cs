@@ -56,20 +56,33 @@ namespace CESimpleSidearmsCompat.Patches
         }
     }
 
+    /// <summary>
+    /// The explicit-switch half: a specific equip during a CE reload ends the reload
+    /// cleanly first, so the swap does not leave a reload job driving a gun that is no
+    /// longer in hand. Found via the Loadouts module's reviews and fixed here where the
+    /// guard lives: the old prefix ended the reload for EVERY call — including ones SS was
+    /// about to refuse (already-equipped no-ops, its equip-time blocked-weapon check) — so
+    /// a refused switch silently cost the pawn their reload. The no-op case is skipped up
+    /// front; every deeper refusal is repaired after the fact by restarting the reload the
+    /// prefix ended.
+    /// </summary>
     [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipSpecificWeapon),
                   new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) })]
     public static class WeaponAssingment_equipSpecificWeapon_Patch
     {
+        /// <summary>The pawn whose reload the prefix ended for the call in flight.</summary>
+        private static Pawn endedReloadFor;
+
         public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
             new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
             "explicit weapon switches during a reload will not end the reload job cleanly first.");
 
         [HarmonyPrefix]
-        public static void Prefix(Pawn pawn)
+        public static void Prefix(Pawn pawn, ThingWithComps weapon)
         {
             try
             {
-                PrefixInner(pawn);
+                PrefixInner(pawn, weapon);
             }
             catch (Exception e)
             {
@@ -78,11 +91,57 @@ namespace CESimpleSidearmsCompat.Patches
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static void PrefixInner(Pawn pawn)
+        private static void PrefixInner(Pawn pawn, ThingWithComps weapon)
         {
-            if (pawn?.CurJobDef == CE_JobDefOf.ReloadWeapon)
+            if (pawn?.CurJobDef != CE_JobDefOf.ReloadWeapon)
             {
-                pawn.jobs.EndCurrentJob(JobCondition.InterruptForced, startNewJob: false, canReturnToPool: true);
+                return;
+            }
+            // Equipping the already-equipped weapon is a no-op SS refuses immediately —
+            // nothing is about to conflict with the reload, so keep it running.
+            if (weapon != null && weapon == pawn.equipment?.Primary)
+            {
+                return;
+            }
+            pawn.jobs.EndCurrentJob(JobCondition.InterruptForced, startNewJob: false, canReturnToPool: true);
+            endedReloadFor = pawn;
+        }
+
+        [HarmonyPostfix]
+        public static void Postfix(Pawn pawn, bool __result)
+        {
+            try
+            {
+                PostfixInner(pawn, __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Reload restart after a refused switch failed. " + e, 0x43455313);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PostfixInner(Pawn pawn, bool __result)
+        {
+            if (endedReloadFor != pawn)
+            {
+                return;
+            }
+            endedReloadFor = null;
+            // The equip went through — the reload was ended for a reason and the new
+            // weapon is not the one it was feeding.
+            if (__result)
+            {
+                return;
+            }
+            // SS refused after the prefix ran (blocked weapon, invalid carrier): the pawn
+            // still holds the half-reloaded gun and lost the job for nothing. Restart it
+            // rather than leaving the magazine empty until something else notices.
+            CompAmmoUser ammoUser = pawn?.equipment?.Primary?.TryGetComp<CompAmmoUser>();
+            Verse.AI.Job reload = ammoUser?.TryMakeReloadJob();
+            if (reload != null && pawn.jobs != null && pawn.CurJob == null)
+            {
+                pawn.jobs.StartJob(reload, JobCondition.InterruptForced);
             }
         }
     }

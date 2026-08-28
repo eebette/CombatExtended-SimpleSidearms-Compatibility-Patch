@@ -64,6 +64,12 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return true;
             }
+            // Kept although CE's original opens with the same test (#22/V8 proposed deleting
+            // it): this prefix does NOT fall through to the original on the arbitration
+            // paths below, so without this guard SS would happily swap away a NoSwitch
+            // weapon (persona weapons and the like) that CE refuses to. Reading a weaponTag
+            // has exactly one shape and the tag is CE's published extension point — this is
+            // convergent use of a public identifier, not a transcription.
             if (pawn.equipment?.Primary?.def.weaponTags?.Contains("NoSwitch") ?? false)
             {
                 return true;

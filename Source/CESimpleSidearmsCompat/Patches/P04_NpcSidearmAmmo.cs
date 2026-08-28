@@ -48,12 +48,13 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
-            // The pawnkind's CE ammo policy, if it has one: forced category, then a weighted
-            // roll over the faction's categories, then generateAllowChance. Letting CE apply
-            // it is what keeps SS-generated sidearms in the same ammo economy as the primary
-            // CE generated a moment earlier — otherwise every one of them carries the default
-            // round and faction AP/incendiary loadouts stop at the primary weapon.
+            // The pawnkind's CE ammo policy, if it has one: letting CE apply it keeps
+            // SS-generated sidearms in the same ammo economy as the primary CE generated a
+            // moment earlier — otherwise every one of them carries the default round and
+            // faction AP/incendiary loadouts stop at the primary weapon. Kinds without the
+            // extension get a bare instance, so the same CE code path provisions them too.
             LoadoutPropertiesExtension loadoutProps = pawn.kindDef?.GetModExtension<LoadoutPropertiesExtension>();
+            LoadoutPropertiesExtension ammoPolicy = loadoutProps ?? BareAmmoPolicy;
 
             bool changed = false;
             foreach (ThingWithComps weapon in pawn.inventory.innerContainer.OfType<ThingWithComps>().Where(t => t.def.IsWeapon).ToList())
@@ -63,15 +64,13 @@ namespace CESimpleSidearmsCompat.Patches
                 {
                     continue;
                 }
-                // An empty magazine is not conditional on the ammo system: CompAmmoUser.Initialize
-                // skips loading when !UseAmmo and leaves the gun unfireable either way. CE's own
-                // generator fills it regardless (LoadWeaponWithRandAmmo's !UseAmmo branch), so a
-                // squad would otherwise spawn with loaded primaries and empty sidearms.
+                // A gun generated with an empty magazine is unfireable whether or not the
+                // ammo system is on; CE's own generator loads every primary, so a squad
+                // would otherwise spawn with loaded primaries and empty sidearms.
                 if (ammoUser.HasMagazine && ammoUser.CurMagCount <= 0)
                 {
                     if (loadoutProps != null)
                     {
-                        // Picks the ammo AND fills the magazine, and handles !UseAmmo itself.
                         loadoutProps.LoadWeaponWithRandAmmo(weapon);
                     }
                     else
@@ -90,32 +89,22 @@ namespace CESimpleSidearmsCompat.Patches
                 {
                     continue;
                 }
-                int magazines = MagazineCountFor(pawn);
-                // MagSizeOverride is CE's "rounds per magazine for generation" knob — one-shot
-                // launchers set it because their MagSize is 1.
-                int perMagazine = Math.Max(1, ammoUser.MagSizeOverride > 0 ? ammoUser.MagSizeOverride
-                                            : ammoUser.HasMagazine ? ammoUser.MagSize : 10);
-                Thing ammo = ThingMaker.MakeThing(ammoDef);
-                ammo.stackCount = magazines * perMagazine;
-                if (inventory.CanFitInInventory(ammo, out int fitCount) && fitCount > 0)
-                {
-                    if (fitCount < ammo.stackCount)
-                    {
-                        // Whole magazines only, as CE's own TryGenerateAmmoFor does.
-                        ammo.stackCount = fitCount - (fitCount % perMagazine);
-                    }
-                    if (ammo.stackCount > 0)
-                    {
-                        inventory.container.TryAdd(ammo, true);
-                        changed = true;
-                    }
-                }
+                // CE's own provisioner (publicized): picks the round under the kind's ammo
+                // policy, sizes the stack per magazine, fits it to inventory and trims to
+                // whole magazines. Calling it is what keeps this identical to how CE stocks
+                // the primary — and an upstream ask to make it public is on the issue-5
+                // list so the publicizer is not load-bearing.
+                ammoPolicy.TryGenerateAmmoFor(weapon, inventory, MagazineCountFor(pawn));
+                changed = true;
             }
             if (changed)
             {
                 inventory.UpdateInventory();
             }
         }
+
+        /// <summary>Ammo policy for pawnkinds that ship no CE loadout extension at all.</summary>
+        private static readonly LoadoutPropertiesExtension BareAmmoPolicy = new LoadoutPropertiesExtension();
 
         private static int MagazineCountFor(Pawn pawn)
         {

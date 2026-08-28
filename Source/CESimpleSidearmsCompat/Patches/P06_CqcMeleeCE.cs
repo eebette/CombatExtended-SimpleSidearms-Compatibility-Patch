@@ -2,15 +2,17 @@ using System;
 using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
-using PeteTimesSix.SimpleSidearms.Utilities;
+using PeteTimesSix.SimpleSidearms.Intercepts;
 using Verse;
 
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 6: SS's CQC reaction (victim auto-draws a melee weapon when melee-attacked) hooks
-    /// vanilla Verb_MeleeAttack.TryCastShot. CE's Verb_MeleeAttackCE overrides that method,
-    /// so the SS hook never fires. Mirror SS's postfix on the CE override.
+    /// Axis 6: SS's CQC reaction (victim auto-draws a melee weapon when melee-attacked)
+    /// hooks vanilla Verb_MeleeAttack.TryCastShot. CE's Verb_MeleeAttackCE overrides that
+    /// method, so the SS hook never fires. This re-attaches SS's OWN postfix — a public
+    /// static that takes the vanilla base type — to the CE override; SS's body runs, and
+    /// whatever SS changes about its guards next update, this inherits.
     /// </summary>
     [HarmonyPatch(typeof(Verb_MeleeAttackCE), "TryCastShot", new Type[0])]
     public static class Verb_MeleeAttackCE_TryCastShot_Patch
@@ -34,17 +36,7 @@ namespace CESimpleSidearmsCompat.Patches
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void PostfixInner(Verb_MeleeAttackCE __instance)
         {
-            Thing targetThing = __instance.CurrentTarget.Thing;
-            Pawn caster = __instance.CasterPawn;
-            if (caster == null || !(targetThing is Pawn target))
-            {
-                return;
-            }
-            if (target.Dead || !target.RaceProps.Humanlike || target.equipment == null)
-            {
-                return;
-            }
-            WeaponAssingment.doCQC(target, caster);
+            Verb_MeleeAttack_TryCastShot_PostFix.TryCastShot(__instance);
         }
     }
 }

@@ -14,7 +14,8 @@ namespace CESimpleSidearmsCompat.Patches
     /// <summary>
     /// Axis 2: SS scores ranged weapons with vanilla verb stats, which are meaningless on CE
     /// weapons (zeroed accuracy, ammo-driven damage, reload downtime). These patches make
-    /// SS's DPS ranking use CE's stat model while preserving SS's speed-bias semantics.
+    /// SS's DPS ranking use CE's stat model; the speed bias the player sets still applies,
+    /// on this module's own curve (see CEDps).
     /// </summary>
     /// <summary>
     /// Scoring runs once per carried weapon, per warming-up pawn, per tick — and SS asks for
@@ -45,7 +46,7 @@ namespace CESimpleSidearmsCompat.Patches
         private static int tick = -1;
         private static readonly Dictionary<int, Accuracy> accuracyStats = new Dictionary<int, Accuracy>();
         private static readonly Dictionary<int, Reload> reloadStats = new Dictionary<int, Reload>();
-        private static readonly Dictionary<int, float> shooters = new Dictionary<int, float>();
+        private static readonly Dictionary<long, float> hitFactors = new Dictionary<long, float>();
 
         private static void EnsureTick()
         {
@@ -57,7 +58,7 @@ namespace CESimpleSidearmsCompat.Patches
             tick = now;
             accuracyStats.Clear();
             reloadStats.Clear();
-            shooters.Clear();
+            hitFactors.Clear();
         }
 
         /// <summary>
@@ -97,18 +98,22 @@ namespace CESimpleSidearmsCompat.Patches
             return stats;
         }
 
-        /// <summary>One shooter scores every weapon they carry — resolve their accuracy once.</summary>
-        internal static float ShootingAccuracyOf(Pawn pawn)
+        /// <summary>
+        /// One warming-up pawn scores every carried weapon against the same target, so the
+        /// (weapon, distance) hit factor repeats within the tick — and the CE hit model
+        /// behind it is the costliest part of the score.
+        /// </summary>
+        internal static float HitFactorOf(ThingWithComps weapon, float distance, Func<float> compute)
         {
             EnsureTick();
-            if (shooters.TryGetValue(pawn.thingIDNumber, out float cached))
+            long key = ((long)weapon.thingIDNumber << 32) | (uint)BitConverter.SingleToInt32Bits(distance);
+            if (hitFactors.TryGetValue(key, out float cached))
             {
                 return cached;
             }
-            float accuracy = Mathf.Min(pawn.GetStatValue(StatDefOf.ShootingAccuracyPawn),
-                                       StatCalculator_RangedDPS_Patch.MaxShootingAccuracy);
-            shooters[pawn.thingIDNumber] = accuracy;
-            return accuracy;
+            float value = compute();
+            hitFactors[key] = value;
+            return value;
         }
     }
 
@@ -167,9 +172,6 @@ namespace CESimpleSidearmsCompat.Patches
                   new[] { typeof(ThingWithComps), typeof(float), typeof(float), typeof(float) })]
     public static class StatCalculator_RangedDPS_Patch
     {
-        /// <summary>CE caps the shooting-accuracy term here (Verb_LaunchProjectileCE.ShootingAccuracy).</summary>
-        internal const float MaxShootingAccuracy = 4.5f;
-
         /// <summary>
         /// Stand-in range for the distance-free scoring path, which SS uses when no target is
         /// known. SS averaged the weapon's short/medium/long accuracy stats there; this plays
@@ -209,42 +211,55 @@ namespace CESimpleSidearmsCompat.Patches
                 __result = 0f;
                 return false;
             }
-            // Mirrors SS's own (quirky, squared-vs-unsquared) range gate so relative ordering
-            // stays consistent with what SS's callers expect.
-            if (atkProps.range * atkProps.range < distance || atkProps.minRange * atkProps.minRange > distance)
+            // Vanilla range semantics: the caller passes a plain cell distance
+            // (findBestRangedWeapon uses DistanceTo), so that is what the weapon's range is
+            // compared against. Stock SS squares the range on both sides of this gate, which
+            // lets a 30-cell gun stay scoreable out to 900 — CE-scored weapons use the
+            // corrected gate, so ordering can differ from stock SS at extreme range.
+            if (atkProps.range < distance || atkProps.minRange > distance)
             {
                 __result = -1f;
                 return false;
             }
-            __result = CEDps(weapon, ammoUser, atkProps, speedBias, averageSpeed) * CEHitFactor(weapon, distance);
+            __result = CEDps(weapon, ammoUser, atkProps, speedBias, averageSpeed) * CEHitFactor(weapon, ammoUser, distance);
             return false;
         }
 
         /// <summary>
-        /// Distance-dependent hit proxy from CE's accuracy stats, converted to lateral miss
-        /// distance at range. Not CE's real ballistics — just enough distance falloff that SS
-        /// ranks a shotgun above a sniper up close and the reverse at range, mirroring the
-        /// role vanilla hit-chance plays in SS's formula.
+        /// The chance-to-connect term of the score, asked of CE's own public hit model
+        /// (CE_Math.CalculateHitPercent — the function behind CE's estimated-hit-chance
+        /// readout) instead of a curve invented here. SS gives this path a distance and
+        /// nothing else, so the terms a real shot would bring are this module's own
+        /// documented stand-ins:
         ///
-        /// Sway is deliberately NOT summed into the spread as if it were degrees: CE's own
-        /// SwayAmplitude is (4.5 - shooting accuracy) x SwayFactor, so the raw factor is a
-        /// multiplier, not an angle. Adding it directly let sway account for ~90% of the term
-        /// on a typical gun and made both the weapon's real spread and the shooter's skill
-        /// nearly irrelevant to the ranking.
+        ///  - the target is a reference human silhouette (0.5 x 1.75 cells) — there is no
+        ///    target object to measure;
+        ///  - sway enters as the weapon's SwayFactor read directly as degrees — the
+        ///    shooter's skill term scales every candidate's sway equally, and this is a
+        ///    ranking, not a shot simulation;
+        ///  - visibility, target lead and firing angle are identical for every candidate
+        ///    and passed as zero (which also makes the projectile-speed and gravity terms
+        ///    inert — they only shape the drop correction that hangs off visibility).
         /// </summary>
-        internal static float CEHitFactor(ThingWithComps weapon, float distance)
+        internal static float CEHitFactor(ThingWithComps weapon, CompAmmoUser ammoUser, float distance)
         {
-            ScoreCache.Accuracy stats = ScoreCache.AccuracyOf(weapon);
-            float spreadDegrees = stats.spread;
-            float swayFactor = stats.sway;
-            Pawn carrier = CompatUtil.CarrierOf(weapon);
-            float shootingAccuracy = carrier != null
-                ? ScoreCache.ShootingAccuracyOf(carrier)
-                : MaxShootingAccuracy; // unknown shooter: score the weapon on its own spread
-            float angularErrorDegrees = spreadDegrees + Mathf.Max(0f, MaxShootingAccuracy - shootingAccuracy) * swayFactor;
-            float lateralMissCells = distance * angularErrorDegrees * 0.01745f;
-            return Mathf.Clamp01(0.4f / Mathf.Max(0.04f, lateralMissCells));
+            return ScoreCache.HitFactorOf(weapon, distance, () =>
+            {
+                ScoreCache.Accuracy stats = ScoreCache.AccuracyOf(weapon);
+                float dist = Mathf.Max(1f, distance);
+                float shotSpeed = Mathf.Max(1f,
+                    CompatUtil.CurrentProjectile(weapon, ammoUser)?.projectile?.speed ?? 0f);
+                return Mathf.Clamp01(CE_Math.CalculateHitPercent(
+                    dist, ReferenceTargetWidth, ReferenceTargetHeight, offset: 0f,
+                    shotSpeed: shotSpeed, shotAngle: 0f,
+                    swayDegrees: stats.sway, spreadDegrees: stats.spread,
+                    visibilityShift: 0f, gravity: CE_Utility.GravityConst));
+            });
         }
+
+        /// <summary>Reference silhouette a hypothetical shot is scored against — roughly a standing human.</summary>
+        internal const float ReferenceTargetWidth = 0.5f;
+        internal const float ReferenceTargetHeight = 1.75f;
 
         internal static float CEDps(ThingWithComps weapon, CompAmmoUser ammoUser, VerbProperties atkProps, float speedBias, float averageSpeed)
         {
@@ -254,16 +269,19 @@ namespace CESimpleSidearmsCompat.Patches
             damage *= Math.Max(1, pellets);
             float burst = Math.Max(1, atkProps.burstShotCount);
             float speed = StatCalculator.RangedSpeed(weapon); // includes our reload amortization
-
-            // Same speed-bias adjustment SS applies in its vanilla formulas.
-            float diffFromAverage = (speed - averageSpeed) * (speedBias - 1f);
-            speed += diffFromAverage;
             if (speed <= 0f)
             {
                 return 0f;
             }
-            // Flat damage-per-cycle; both variants multiply in CEHitFactor.
-            return damage * burst / speed;
+            // This module's own speed-bias curve: the raw rate is scaled by how the
+            // weapon's pace compares to the carried average, raised to the bias the player
+            // set. Bias 1 (the default) is exactly neutral; above it, slower-than-average
+            // weapons fall off multiplicatively. CE weapons rank on this curve, not on
+            // stock SS's — SS was asked to expose its own adjustment (issue #22 / V3).
+            float paceFactor = averageSpeed > 0f
+                ? Mathf.Pow(averageSpeed / speed, speedBias - 1f)
+                : 1f;
+            return damage * burst / speed * paceFactor;
         }
     }
 
@@ -310,7 +328,7 @@ namespace CESimpleSidearmsCompat.Patches
             // attachments, and damaged parts) in ShotSpread, so scoring the hit proxy at a
             // fixed reference range restores the signal without leaving CE's own model.
             __result = StatCalculator_RangedDPS_Patch.CEDps(weapon, ammoUser, atkProps, speedBias, averageSpeed)
-                       * StatCalculator_RangedDPS_Patch.CEHitFactor(weapon, StatCalculator_RangedDPS_Patch.NoTargetReferenceDistance);
+                       * StatCalculator_RangedDPS_Patch.CEHitFactor(weapon, ammoUser, StatCalculator_RangedDPS_Patch.NoTargetReferenceDistance);
             return false;
         }
     }
