@@ -5,43 +5,56 @@ using HarmonyLib;
 using PeteTimesSix.SimpleSidearms;
 using PeteTimesSix.SimpleSidearms.Utilities;
 using static PeteTimesSix.SimpleSidearms.Utilities.Enums;
+using RimWorld;
 using SimpleSidearms.rimworld;
 using Verse;
 
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 9: CE's CompInventory.SwitchToNextViableWeapon (weapon destroyed, one-use
-    /// consumed, grenade thrown, empty gun mid-cast) picks a replacement by CE's own
-    /// heuristic, ignoring SS preferences and remembered sidearms. For SS-managed pawns, SS
-    /// chooses; CE's logic (incl. fists) is the fallback when SS has no opinion. Specialized
-    /// CE calls (AOE requests, predicated searches) pass through.
+    /// Axis 9: when CE replaces a lost, consumed, or dry weapon, Simple Sidearms should
+    /// choose the replacement; CE keeps everything else — the job it queues, the mote, the
+    /// stow mechanics, the fists fallback.
     ///
-    /// The split follows the seam between the two mods: SS owns which weapon, CE owns what
-    /// the swap costs. CE says which it wants through stopJob — true means swap now, false
-    /// means queue an interruptible CE_JobDefOf.EquipFromInventory job. Equipping SS's pick
-    /// directly would answer both questions and silently make CE's slow path instant, so
-    /// when CE asks for the job, SS is consulted without letting it equip (see
-    /// WeaponAssingment_equipSpecificWeapon_DryRun) and its answer is handed back to CE as a
-    /// candidate filter — CE's own job branch does the rest.
+    /// One choke point delivers that: every CE replacement path — the out-of-ammo action's
+    /// direct search, SwitchToNextViableWeapon's search (weapon destroyed, one-use
+    /// consumed), and the flare-gun swap-away — funnels through the public
+    /// CompInventory.TryFindViableWeapon. The prefix below substitutes SS's answer as the
+    /// weapon CE "found", and CE's own caller then does with it exactly what it would have
+    /// done with its own pick. When SS has no usable answer, CE's search runs untouched.
+    ///
+    /// History note (adversarial round 3): the previous shape patched only
+    /// SwitchToNextViableWeapon and re-entered CE's search restricted to SS's pick. That
+    /// missed CE's main dry-gun path entirely (DoOutOfAmmoAction searches directly), and
+    /// the re-entry was built on two traps — CE's fists branch strips the pawn and reports
+    /// success, and TryFindViableWeapon's predicate parameter is broken as shipped
+    /// (operator precedence ignores it for any loaded ammo-comp gun, and dereferences null
+    /// for ammo-comp-less ones; CE itself never passes a predicate, so the bug is latent
+    /// upstream — reported). Substituting at the search instead of re-entering removes
+    /// every one of those paths.
+    ///
+    /// Deliberate semantics change that came with the move: an instant CE-initiated swap
+    /// now equips SS's pick through CE's stow mechanics rather than SS's own equip (with
+    /// its fumble-drop rolls). The switch is CE's event; CE's mechanics own it. SS's
+    /// memory stays correct either way — its equip hooks observe the equipment change
+    /// itself.
     /// </summary>
-    [HarmonyPatch(typeof(CompInventory), nameof(CompInventory.SwitchToNextViableWeapon),
-                  new[] { typeof(bool), typeof(bool), typeof(bool), typeof(Func<ThingWithComps, CompAmmoUser, bool>) })]
-    public static class CompInventory_SwitchToNextViableWeapon_Patch
+    [HarmonyPatch(typeof(CompInventory), nameof(CompInventory.TryFindViableWeapon),
+                  new[] { typeof(ThingWithComps), typeof(bool), typeof(Func<ThingWithComps, CompAmmoUser, bool>) },
+                  new[] { ArgumentType.Out, ArgumentType.Normal, ArgumentType.Normal })]
+    public static class CompInventory_TryFindViableWeapon_Patch
     {
-        private static bool inSSEquip;
-
-        public static bool Prepare() => PatchGuard.Require(typeof(CompInventory), "SwitchToNextViableWeapon",
-            new[] { typeof(bool), typeof(bool), typeof(bool), typeof(Func<ThingWithComps, CompAmmoUser, bool>) },
-            "weapon switching after a loss or one-use consumption will ignore Simple Sidearms preferences.");
+        public static bool Prepare() => PatchGuard.Require(typeof(CompInventory), "TryFindViableWeapon",
+            new[] { typeof(ThingWithComps).MakeByRefType(), typeof(bool), typeof(Func<ThingWithComps, CompAmmoUser, bool>) },
+            "weapon replacement after a loss, consumption, or dry magazine will ignore Simple Sidearms preferences.");
 
         [HarmonyPrefix]
-        public static bool Prefix(CompInventory __instance, bool useFists, bool useAOE, bool stopJob,
+        public static bool Prefix(CompInventory __instance, ref ThingWithComps weapon, bool useAOE,
                                   Func<ThingWithComps, CompAmmoUser, bool> predicate, ref bool __result)
         {
             try
             {
-                return PrefixInner(__instance, useFists, useAOE, stopJob, predicate, ref __result);
+                return PrefixInner(__instance, ref weapon, useAOE, predicate, ref __result);
             }
             catch (Exception e)
             {
@@ -52,10 +65,12 @@ namespace CESimpleSidearmsCompat.Patches
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static bool PrefixInner(CompInventory __instance, bool useFists, bool useAOE, bool stopJob,
+        private static bool PrefixInner(CompInventory __instance, ref ThingWithComps weapon, bool useAOE,
                                         Func<ThingWithComps, CompAmmoUser, bool> predicate, ref bool __result)
         {
-            if (inSSEquip || useAOE || predicate != null)
+            // Specialized CE calls (AOE requests, predicated searches) pass through — they
+            // are CE asking a narrower question than "what should this pawn hold".
+            if (useAOE || predicate != null)
             {
                 return true;
             }
@@ -64,127 +79,99 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return true;
             }
-            // Kept although CE's original opens with the same test (#22/V8 proposed deleting
-            // it): this prefix does NOT fall through to the original on the arbitration
-            // paths below, so without this guard SS would happily swap away a NoSwitch
-            // weapon (persona weapons and the like) that CE refuses to. Reading a weaponTag
-            // has exactly one shape and the tag is CE's published extension point — this is
-            // convergent use of a public identifier, not a transcription.
+            // Kept although both current CE callers pre-check the tag themselves: this
+            // prefix must hold for any future caller too, and reading a weaponTag has one
+            // shape — convergent use of CE's published extension point, not a
+            // transcription (#22/V8 ruling).
             if (pawn.equipment?.Primary?.def.weaponTags?.Contains("NoSwitch") ?? false)
             {
                 return true;
             }
 
-            return stopJob
-                ? SwitchNow(pawn, ref __result)
-                : SwitchViaJob(__instance, pawn, useFists, useAOE, ref __result);
-        }
-
-        /// <summary>
-        /// CE wanted an immediate swap, which is also how SS equips — let SS do the whole
-        /// thing.
-        /// </summary>
-        private static bool SwitchNow(Pawn pawn, ref bool __result)
-        {
-            ThingWithComps before = pawn.equipment?.Primary;
-            inSSEquip = true;
-            try
-            {
-                // Blocked during CE reload jobs by the axis-5 guard, which then lets CE's
-                // own picker run — intended interplay.
-                WeaponAssingment.equipBestWeaponFromInventoryByPreference(pawn, DroppingModeEnum.Combat);
-            }
-            finally
-            {
-                inSSEquip = false;
-            }
-            ThingWithComps after = pawn.equipment?.Primary;
-            if (after != null && after != before)
-            {
-                __result = true;
-                return false; // SS handled the switch
-            }
-            return WantsToStayUnarmed(pawn) ? Handled(ref __result) : true;
-        }
-
-        /// <summary>
-        /// CE wanted to queue an equip job. Ask SS which weapon without letting it equip,
-        /// then re-enter CE restricted to that weapon so CE's own stopJob branch runs.
-        /// </summary>
-        private static bool SwitchViaJob(CompInventory inventory, Pawn pawn, bool useFists, bool useAOE, ref bool __result)
-        {
             ThingWithComps pick = WeaponAssingment_equipSpecificWeapon_DryRun.AskSS(pawn, out bool ssDecided);
-            if (!ssDecided || pick == pawn.equipment?.Primary)
+            if (!ssDecided)
             {
-                return true; // SS had no opinion, or none this call can act on — CE's turn
+                // SS's silence has two shapes (see AskSS): an already-unarmed pawn whose
+                // memory says "stay unarmed" never reaches an equip at all, and letting
+                // CE's search run would re-arm a pawn the player set to fists.
+                if (WantsToStayUnarmed(pawn))
+                {
+                    weapon = null;
+                    __result = false;
+                    return false;
+                }
+                return true; // no opinion — CE's own search
             }
             if (pick == null)
             {
-                return Handled(ref __result); // SS's answer is "no weapon" — do not re-arm
+                // SS deliberately chose "no weapon".
+                weapon = null;
+                __result = false;
+                return false;
             }
-
-            inSSEquip = true;
-            try
+            if (pick == pawn.equipment?.Primary)
             {
-                __result = inventory.SwitchToNextViableWeapon(useFists, useAOE, stopJob: false,
-                                                              predicate: (weapon, _) => weapon == pick);
+                // Nothing this search can act on — CE's own search skips the primary too.
+                return true;
             }
-            finally
+            // CE must actually be able to use the pick: the same public gates its own
+            // search applies. An unusable pick (a dry gun the player forced, a biocoded
+            // weapon) hands the search back to CE unrestricted — its fists fallback then
+            // only fires when NOTHING is usable, instead of stripping the pawn because
+            // SS's first choice was.
+            CompAmmoUser ammoUser = pick.TryGetComp<CompAmmoUser>();
+            if (!EquipmentUtility.CanEquip(pick, pawn)
+                || (ammoUser != null && !ammoUser.HasAndUsesAmmoOrMagazine))
             {
-                inSSEquip = false;
+                return true;
             }
-            // CE could not use SS's pick (its viability search is narrower than SS's) —
-            // nothing was equipped, so hand the decision back rather than leaving the pawn
-            // holding an empty gun.
-            return !__result;
+            weapon = pick;
+            __result = true;
+            return false;
         }
 
         /// <summary>
         /// Forced-unarmed, forced-unarmed-while-drafted and preferred-unarmed all leave
-        /// Primary null on success, so an empty hand is an answer rather than a failure. Ask
-        /// SS instead of inferring it from the equipment pointer, or CE re-arms a pawn the
-        /// player set to fists.
+        /// Primary null on success, so an empty hand is an answer rather than a failure.
+        /// Ask SS instead of inferring it from the equipment pointer, or CE re-arms a pawn
+        /// the player set to fists.
         /// </summary>
         private static bool WantsToStayUnarmed(Pawn pawn)
         {
             return pawn.equipment?.Primary == null
                    && (CompSidearmMemory.GetMemoryCompForPawn(pawn, false)?.IsCurrentWeaponForced(true) ?? false);
         }
-
-        private static bool Handled(ref bool __result)
-        {
-            __result = false;
-            return false;
-        }
     }
 
     /// <summary>
+    /// Every branch of SS's preference tree — forced weapon, forced-while-drafted, default
+    /// ranged, preferred melee, unarmed, best-by-DPS — ends at this one method, and each
+    /// returns as soon as it succeeds.
+    ///
     /// CONTRACT (relied on beyond this file): AskSS observes without acting. While it is on
     /// the stack, nothing is equipped, dropped, forgotten, or remembered — SS's preference
     /// tree is halted at the exact decision point and its answer extracted. Any change that
     /// lets a side effect escape the dry run breaks every caller that treats "ask SS" as a
     /// pure question, and the suite's arbitration phases with it.
     ///
-    /// Every branch of SS's preference tree — forced weapon, forced-while-drafted, default
-    /// ranged, preferred melee, unarmed, best-by-DPS — ends at this one method, and each
-    /// returns as soon as it succeeds. Reporting success without equipping therefore stops
-    /// the tree exactly at its decision and yields the weapon SS would have equipped,
-    /// without this mod re-deriving any of that ordering (the type-resolving entry point
-    /// even applies SS's own highest-market-value tie-break before it gets here).
-    ///
-    /// Only active inside AskSS, for one pawn, for the duration of one synchronous call.
+    /// Composition note: halting via a false-returning prefix also skips any
+    /// later-registered prefix on equipSpecificWeapon (Harmony semantics), so the dry run
+    /// reflects SS as patched by everything that loaded BEFORE this mod. Consumers loading
+    /// after must not rely on their own equipSpecificWeapon prefixes firing during
+    /// arbitration — their filters on the picker functions (which run inside the dry run)
+    /// are the composing surface.
     /// </summary>
     [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipSpecificWeapon),
                   new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) })]
     public static class WeaponAssingment_equipSpecificWeapon_DryRun
     {
-        public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
-            new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
-            "asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.");
-
         private static Pawn askingFor;
         private static ThingWithComps answer;
         private static bool answered;
+
+        public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
+            new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
+            "asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.");
 
         /// <summary>
         /// The weapon SS would equip right now. <paramref name="decided"/> separates SS's two
