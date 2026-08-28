@@ -125,6 +125,11 @@ namespace CESSCompatTestStaging
             "[CETest] Scenario complete",
             "[CETest] Loadouts module",
             "[CETestStaging]",
+            // SS's own equip-time refusal warnings, provoked DELIBERATELY by the two
+            // reload-guard phases (a no-op switch and a blocked switch during a reload).
+            // Both are SS saying "I refused", with no error state behind them.
+            "Attepmpted to equip already-equipped weapon",
+            "SS: Blocked equip of",
             // RimBridge logs startup telemetry at Warning level and its startup straddles
             // the log baseline. Development tool, not shipped, nothing here provokes it.
             "[RimBridge] STARTUP_TIMING",
@@ -380,7 +385,14 @@ namespace CESSCompatTestStaging
                 }
                 catch (Exception e)
                 {
-                    check.lastDetail = "EXCEPTION: " + e.Message;
+                    // Full ToString: a bare Message on an NRE says nothing about WHERE. And
+                    // first-wins: RimWorld dedups repeated stacktraces into "Duplicate
+                    // stacktrace" markers, so re-evaluations would overwrite the only copy
+                    // of the real stack with the marker.
+                    if (!(check.lastDetail?.StartsWith("EXCEPTION") ?? false))
+                    {
+                        check.lastDetail = "EXCEPTION: " + e;
+                    }
                     if (!check.informational)
                     {
                         allPass = false;
@@ -678,13 +690,14 @@ namespace CESSCompatTestStaging
                                 return info != null && info.Owners.Contains("eebette.CESimpleSidearmsCompat");
                             })
                             .ToList();
-                        // 19 distinct methods today: P01 x2, P02 x3, P03 x2, P04 x1, P05 x2
-                        // (one shared with P09's dry-run on the same method), P06 x1, P07 x1,
-                        // P08 x2 (SelfConsume declarations), P09 x2, P10 x2, P11 x2.
-                        // ">=" so an upstream adding a third SelfConsume declaration (the
-                        // probe pins three candidates) cannot fail the census.
-                        return (mine.Count >= 19,
-                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 19): "
+                        // 20 distinct methods today: P01 x3 (capacity gate, retrieval
+                        // postfix+scope on one method, hasWeaponType), P02 x3, P03 x2,
+                        // P04 x1, P05 x2 (one shared with P09's dry-run), P06 x1, P07 x1
+                        // (SS's own warmup postfix, transpiled), P08 x2 (SelfConsume
+                        // declarations), P09 x2, P10 x2, P11 x2. ">=" so an upstream adding
+                        // a third SelfConsume declaration cannot fail the census.
+                        return (mine.Count >= 20,
+                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 20): "
                             + string.Join(", ", mine.Select(m => m.DeclaringType?.Name + "." + m.Name).OrderBy(n => n)));
                     }),
                 }
@@ -826,9 +839,9 @@ namespace CESSCompatTestStaging
                             (Carried(bulky, pistol) != null, $"carried={Carried(bulky, pistol) != null}")),
                         C("exemption-survives-repeat-remembers", () =>
                         {
-                            // SS's memory list grows on repeated remembers (see below); the
-                            // exemption must stay a clean yes/no regardless, and must still not
-                            // write anything into CE's tracker.
+                            // Repeated remembers can grow SS's memory list (observably, no
+                            // dedup fires); the exemption must stay a clean yes/no regardless,
+                            // and must still not write anything into CE's tracker.
                             bool excess = Utility_HoldTracker.GetExcessThing(bulky, out Thing dropThing, out int _);
                             bool pistolTargeted = excess && dropThing?.def == pistol;
                             int n = PistolHoldRecords();
@@ -847,8 +860,194 @@ namespace CESSCompatTestStaging
                         }, informational: true),
                     }
                 },
+                new Phase
+                {
+                    // Issue #23: SS memory is per type, so the drop exemption used to make
+                    // every spare copy of a remembered pair undroppable forever.
+                    label = "spare-copies-of-a-remembered-pair-are-droppable",
+                    deadlineTicks = 4000,
+                    arrange = () =>
+                    {
+                        // The re-remember phase leaves SS's memory holding THREE pistol
+                        // entries (its multiset semantics, no upstream dupe guard) — and the
+                        // exemption honours the multiset, so three remembered entries would
+                        // legitimately protect all three copies. This phase is about SPARES
+                        // BEYOND the memory: normalize to exactly one entry first.
+                        CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(bulky);
+                        while (memory.RememberedWeapons.Count(pr => pr.thing == pistol) > 1)
+                        {
+                            memory.ForgetSidearmMemory(new ThingDefStuffDefPair(pistol, null));
+                        }
+                        if (!memory.RememberedWeapons.Any(pr => pr.thing == pistol))
+                        {
+                            memory.InformOfAddedSidearm(Carried(bulky, pistol));
+                        }
+                        // Two spare pistols straight into the pack; the staged one is
+                        // remembered, these are the battlefield pickups of the bug report.
+                        while (CarriedOfDef(bulky, pistol) < 3)
+                        {
+                            pawnInventoryAdd(bulky, pistol);
+                        }
+                    },
+                    checks =
+                    {
+                        P("one-remembered-three-carried", () =>
+                        {
+                            int remembered = CompSidearmMemory.GetMemoryCompForPawn(bulky)
+                                .RememberedWeapons.Count(pr => pr.thing == pistol);
+                            int carried = CarriedOfDef(bulky, pistol);
+                            return (remembered == 1 && carried == 3, $"remembered={remembered} carried={carried}");
+                        }),
+                        C("excess-names-a-spare-pistol", () =>
+                        {
+                            bool excess = Utility_HoldTracker.GetExcessThing(bulky, out Thing dropThing, out int n);
+                            return (excess && dropThing?.def == pistol,
+                                $"excess={excess} dropThing={dropThing?.def?.defName ?? "none"} count={n}");
+                        }),
+                    }
+                },
+                new Phase
+                {
+                    label = "the-remembered-copy-stays-protected",
+                    deadlineTicks = 4000,
+                    arrange = () =>
+                    {
+                        // Trim back down to the single remembered copy.
+                        foreach (Thing spare in bulky.inventory.innerContainer
+                            .Where(t => t.def == pistol).Skip(1).ToList())
+                        {
+                            spare.Destroy(DestroyMode.Vanish);
+                        }
+                    },
+                    checks =
+                    {
+                        P("exactly-one-pistol-carried", () =>
+                            (CarriedOfDef(bulky, pistol) == 1, $"carried={CarriedOfDef(bulky, pistol)}")),
+                        C("no-drop-proposed-for-the-kept-copy", () =>
+                        {
+                            bool excess = Utility_HoldTracker.GetExcessThing(bulky, out Thing dropThing, out int _);
+                            bool pistolTargeted = excess && dropThing?.def == pistol;
+                            return (!pistolTargeted, $"excess={excess} dropThing={dropThing?.def?.defName ?? "none"}");
+                        }),
+                    }
+                },
+                new Phase
+                {
+                    // Issue #20: SS's retrieval loop returns on the first unsatisfied memory
+                    // it can find an instance for. A capacity-refusal used to mean no
+                    // retrieval at all this pass — and a permanent map-wide rescan.
+                    label = "a-refused-heavy-memory-does-not-block-the-next",
+                    deadlineTicks = 4000,
+                    minTicks = 300, // window for the not-forgotten negative
+                    // Everything happens in mutate, at a REAL tick: at tick 0 (isolated
+                    // runs fire arrange straight from LoadedGame) CE's capacity stats read
+                    // as zeroes, so a capacity-targeted fill silently no-ops and the fit
+                    // predicates flip once the world starts ticking.
+                    checks =
+                    {
+                        P("world-is-ticking", () =>
+                            (Find.TickManager.TicksGame > 60, $"tick={Find.TickManager.TicksGame}")),
+                        C("setup-heavy-gun-unfittable-knife-fittable", () =>
+                            (setupBigWontFit && setupKnifeFits,
+                             $"bigWontFit={setupBigWontFit} knifeFits={setupKnifeFits} {retrievalDebug}")),
+                        C("first-pass-refuses-the-heavy-gun", () =>
+                            (retrievalFirstPass == null,
+                             $"job={retrievalFirstPass?.def?.defName ?? "null"} target={retrievalFirstPass?.targetA.Thing?.def?.defName ?? "-"}")),
+                        C("second-pass-fetches-the-knife", () =>
+                        {
+                            bool knife = retrievalSecondPass?.targetA.Thing?.def == D("MeleeWeapon_Knife");
+                            return (knife, $"job={retrievalSecondPass?.def?.defName ?? "null"} "
+                                + $"target={retrievalSecondPass?.targetA.Thing?.def?.defName ?? "-"}");
+                        }),
+                        N("the-refused-memory-is-not-forgotten", () =>
+                        {
+                            bool still = CompSidearmMemory.GetMemoryCompForPawn(bulky)
+                                .RememberedWeapons.Any(pr => pr.thing == D("Gun_Minigun"));
+                            return (still, "minigun remembered=" + still);
+                        }),
+                    },
+                    mutate = () =>
+                    {
+                        SpawnNear(bulky, D("Gun_Minigun"), null);
+                        SpawnNear(bulky, D("MeleeWeapon_Knife"), D("Steel"));
+                        CompInventory inv = bulky.TryGetComp<CompInventory>();
+                        inv.UpdateInventory();
+                        ThingWithComps bigThing = bulky.Map.listerThings.ThingsOfDef(D("Gun_Minigun"))
+                            .OfType<ThingWithComps>().First(t => t.Spawned);
+                        ThingWithComps knifeThing = bulky.Map.listerThings.ThingsOfDef(D("MeleeWeapon_Knife"))
+                            .OfType<ThingWithComps>().First(t => t.Spawned);
+                        // Ballast against the REAL predicate — CanFitInInventory itself —
+                        // until the heavy gun stops fitting; the knife needs a fraction of
+                        // that room and keeps fitting.
+                        for (int guard = 0; guard < 60 && inv.CanFitInInventory(bigThing, out int _); guard++)
+                        {
+                            Thing steel = ThingMaker.MakeThing(D("Steel"));
+                            steel.stackCount = 10;
+                            bulky.inventory.innerContainer.TryAdd(steel, canMergeWithExistingStacks: false);
+                            inv.UpdateInventory();
+                        }
+                        setupBigWontFit = !inv.CanFitInInventory(bigThing, out int _);
+                        setupKnifeFits = inv.CanFitInInventory(knifeThing, out int _);
+
+                        // Unforbid on the RESOLVED instances: the flag set at spawn time
+                        // did not stick (forensics showed the knife still forbidden, and
+                        // SS's search skips forbidden things).
+                        bigThing.SetForbidden(false, warnOnFail: false);
+                        knifeThing.SetForbidden(false, warnOnFail: false);
+                        // Memorise both and take the two passes synchronously — SS's own
+                        // think tree cannot fetch the knife in a poll gap first.
+                        CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(bulky);
+                        memory.InformOfAddedSidearm(bigThing);
+                        memory.InformOfAddedSidearm(knifeThing);
+                        retrievalFirstPass = JobGiver_RetrieveWeapon.TryGiveJobStatic(bulky, inCombat: false);
+                        retrievalSecondPass = JobGiver_RetrieveWeapon.TryGiveJobStatic(bulky, inCombat: false);
+                        // Forensics: a third pass with the heavy memory removed isolates the
+                        // knife search from the skip machinery.
+                        memory.ForgetSidearmMemory(new ThingDefStuffDefPair(D("Gun_Minigun"), null));
+                        Verse.AI.Job third = JobGiver_RetrieveWeapon.TryGiveJobStatic(bulky, inCombat: false);
+                        memory.InformOfAddedSidearm(bigThing);
+                        retrievalDebug = $"third={third?.def?.defName ?? "null"}:{third?.targetA.Thing?.def?.defName ?? "-"} "
+                            + $"knifeForbidden={knifeThing.IsForbidden(bulky)} reservable={bulky.CanReserve(knifeThing)}";
+                    }
+                },
             };
         }
+
+        /// <summary>Instances of a def the pawn carries, equipped included.</summary>
+        private static int CarriedOfDef(Pawn pawn, ThingDef def)
+        {
+            int n = pawn.inventory?.innerContainer?.Count(t => t.def == def) ?? 0;
+            if (pawn.equipment?.Primary?.def == def)
+            {
+                n++;
+            }
+            return n;
+        }
+
+        /// <summary>Raw inventory insert — deliberately bypasses every pickup gate.</summary>
+        private static void pawnInventoryAdd(Pawn pawn, ThingDef def)
+        {
+            var thing = (ThingWithComps)ThingMaker.MakeThing(def, def.MadeFromStuff ? D("Steel") : null);
+            pawn.inventory.innerContainer.TryAdd(thing, canMergeWithExistingStacks: false);
+        }
+
+        private static void SpawnNear(Pawn pawn, ThingDef def, ThingDef stuff)
+        {
+            Thing thing = ThingMaker.MakeThing(def, def.MadeFromStuff ? (stuff ?? D("Steel")) : null);
+            CellFinder.TryFindRandomCellNear(pawn.Position, pawn.Map, 6,
+                c => c.Standable(pawn.Map), out IntVec3 cell);
+            GenPlace.TryPlaceThing(thing, cell, pawn.Map, ThingPlaceMode.Near);
+            // SS's retrieval search skips forbidden things, and placed items can spawn
+            // forbidden to the player faction.
+            thing.SetForbidden(false, warnOnFail: false);
+        }
+
+        // Captured synchronously inside the retrieval-skip phase.
+        private Verse.AI.Job retrievalFirstPass;
+        private Verse.AI.Job retrievalSecondPass;
+        private string retrievalDebug;
+        private bool setupBigWontFit;
+        private bool setupKnifeFits;
 
         // -- CETEST-2: axes 2 (CE DPS), 3/9 (ammo-aware selection), 11 (classification) --
 
@@ -860,6 +1059,38 @@ namespace CESSCompatTestStaging
             ThingDef revolverDef = D("Gun_Revolver");
             ThingDef grenadeDef = D("Weapon_GrenadeEMP");
 
+            // The staged hostile exists so findBestRangedWeapon has a real target; its guns
+            // are not part of any assertion. They used to be its own protection: under the
+            // old invented hit proxy the raider's SS-side pick was poor enough that Picky
+            // survived every run. With scoring on CE's real hit model the raider draws a
+            // loaded gun and downed Picky at tick ~210 (t180 RunForCover, t210 downed,
+            // rifle on the ground — tracked instance-by-instance). A target only needs to
+            // stand there.
+            void DisarmHostiles()
+            {
+                foreach (Pawn hostile in Hostiles())
+                {
+                    // Inventory first: destroying the primary makes CE re-arm from
+                    // inventory synchronously (SwitchToNextViableWeapon on destroy), so an
+                    // equipment-first sweep leaves the raider holding the gun it just
+                    // pulled. Then keep clearing until the hand is actually empty.
+                    for (int guard = 0; guard < 8; guard++)
+                    {
+                        foreach (ThingWithComps w in hostile.inventory?.innerContainer?
+                                     .OfType<ThingWithComps>().Where(t => t.def.IsWeapon).ToList()
+                                 ?? new List<ThingWithComps>())
+                        {
+                            w.Destroy(DestroyMode.Vanish);
+                        }
+                        if (hostile.equipment?.Primary == null)
+                        {
+                            break;
+                        }
+                        hostile.equipment.DestroyAllEquipment();
+                    }
+                }
+            }
+
             return new List<Phase>
             {
                 PatchInventoryPhase(),
@@ -867,6 +1098,7 @@ namespace CESSCompatTestStaging
                 {
                     label = "scoring-and-classification",
                     deadlineTicks = 4000,
+                    arrange = DisarmHostiles,
                     checks =
                     {
                         P("dry-revolver-has-no-ammo", () =>
@@ -882,16 +1114,37 @@ namespace CESSCompatTestStaging
                             bool ok = rifle?.HasAmmoOrMagazine == true && pistolUser?.HasAmmoOrMagazine == true;
                             return (ok, $"rifle={rifle?.HasAmmoOrMagazine} pistol={pistolUser?.HasAmmoOrMagazine}");
                         }),
-                        C("ce-dps-sane", () =>
+                        C("ce-dps-sane-rifle", () =>
                         {
                             float bias = SSCore.Settings.SpeedSelectionBiasRanged;
                             float rifleDps = StatCalculator.RangedDPS(Carried(picky, rifleDef), bias, 0f, 20f);
-                            float pistolDps = StatCalculator.RangedDPS(Carried(picky, pistolDef), bias, 0f, 20f);
-                            bool sane = rifleDps > 0f && pistolDps > 0f
-                                && !float.IsNaN(rifleDps) && !float.IsNaN(pistolDps)
-                                && !float.IsInfinity(rifleDps) && !float.IsInfinity(pistolDps)
-                                && Math.Abs(rifleDps - pistolDps) > 0.01f;
-                            return (sane, $"rifle@20={rifleDps:F2} pistol@20={pistolDps:F2}");
+                            bool sane = rifleDps > 0f && !float.IsNaN(rifleDps) && !float.IsInfinity(rifleDps);
+                            return (sane, $"rifle@20={rifleDps:F2}");
+                        }),
+                        C("ce-dps-sane-pistol", () =>
+                        {
+                            // Scored INSIDE the pistol's own range. The old form asked for
+                            // dps at a flat 20 cells, which only ever worked through stock
+                            // SS's squared range gate — an autopistol's real range is below
+                            // 20, and the corrected gate (#22/V2) rightly returns -1 there.
+                            ThingWithComps pi = Carried(picky, pistolDef);
+                            float range = pi.GetComp<CompEquippable>().PrimaryVerb.verbProps.range;
+                            float dist = Math.Max(2f, Math.Min(8f, range - 2f));
+                            float bias = SSCore.Settings.SpeedSelectionBiasRanged;
+                            float pistolDps = StatCalculator.RangedDPS(pi, bias, 0f, dist);
+                            bool sane = pistolDps > 0f && !float.IsNaN(pistolDps) && !float.IsInfinity(pistolDps);
+                            return (sane, $"pistol@{dist:F0}={pistolDps:F2} (range={range:F0})");
+                        }),
+                        C("out-of-range-scores-negative", () =>
+                        {
+                            // The corrected range gate (#22/V2): a plain cell distance beyond
+                            // the weapon's range must be ineligible (-1). Stock SS squares
+                            // the range on both sides, which kept a 30-cell rifle scoreable
+                            // out to 900 cells.
+                            ThingWithComps rifle = Carried(picky, rifleDef);
+                            float range = rifle.GetComp<CompEquippable>().PrimaryVerb.verbProps.range;
+                            float dps = StatCalculator.RangedDPS(rifle, SSCore.Settings.SpeedSelectionBiasRanged, 0f, range + 20f);
+                            return (dps < 0f, $"range={range:F0} dps@range+20={dps:F2} (want -1)");
                         }),
                         C("rifle-beats-pistol-at-range", () =>
                         {
@@ -928,6 +1181,7 @@ namespace CESSCompatTestStaging
                     label = "dry-primary-switches-to-loaded",
                     deadlineTicks = 6000,
                     minTicks = 600, // the never-dry negative has to hold across a window
+                    arrange = DisarmHostiles, // an isolated run skips the earlier disarm
                     mutate = () =>
                     {
                         // Drain the rifle completely: empty mag AND remove its caliber from
@@ -1016,7 +1270,10 @@ namespace CESSCompatTestStaging
                         SSCore.Settings.RangedCombatAutoSwitch = true;
                         // (kept as a hard stop behind the precondition — a throw here is a
                         // broken arrange, not a product failure)
-                        SSCore.Settings.RangedCombatAutoSwitchMaxWarmup = 5f;
+                        // 0.9 = swap allowed through the first 90% of the warmup — permissive
+                        // arrange, but INSIDE the 0..1 range the setting means anything in
+                        // (the old 5f made the gate a constant, i.e. asserted nothing about it).
+                        SSCore.Settings.RangedCombatAutoSwitchMaxWarmup = 0.9f;
                         Pawn target = Hostiles().FirstOrDefault();
                         if (target == null)
                         {
@@ -1181,8 +1438,114 @@ namespace CESSCompatTestStaging
                         }),
                     }
                 },
+                new Phase
+                {
+                    // The reload-guard refinement (from the Loadouts module's reviews): the
+                    // explicit-switch prefix used to end the reload for EVERY call, refused
+                    // ones included. A no-op switch (the weapon already in hand) must not
+                    // cost the reload.
+                    label = "a-no-op-switch-keeps-the-reload",
+                    deadlineTicks = 15000,
+                    arrange = () =>
+                    {
+                        scopey.drafter.Drafted = false;
+                        scopey.jobs.StopAll();
+                        ThingWithComps primary = scopey.equipment.Primary;
+                        CompAmmoUser user = primary.TryGetComp<CompAmmoUser>();
+                        user.CurMagCount = 0;
+                        Verse.AI.Job reload = user.TryMakeReloadJob();
+                        if (reload != null)
+                        {
+                            scopey.jobs.StartJob(reload, JobCondition.InterruptForced);
+                        }
+                    },
+                    checks =
+                    {
+                        P("a-reload-is-running", () =>
+                            (scopey.CurJobDef == CE_JobDefOf.ReloadWeapon, $"job={scopey.CurJobDef?.defName ?? "none"}")),
+                        C("reload-survives-the-no-op-switch", () =>
+                            (reloadAfterNoopSwitch == CE_JobDefOf.ReloadWeapon,
+                             $"jobAfterCall={reloadAfterNoopSwitch?.defName ?? "none"}")),
+                        C("magazine-refills", () =>
+                        {
+                            CompAmmoUser user = scopey.equipment?.Primary?.TryGetComp<CompAmmoUser>();
+                            bool full = user != null && user.CurMagCount == user.MagSize;
+                            return (full, $"mag={user?.CurMagCount}/{user?.MagSize} job={scopey.CurJobDef?.defName}");
+                        }),
+                    },
+                    mutate = () =>
+                    {
+                        // SS refuses this with its "already-equipped" warning (allowlisted —
+                        // deliberately provoked); the guard must not have ended the reload.
+                        WeaponAssingment.equipSpecificWeapon(scopey, scopey.equipment.Primary,
+                            dropCurrent: false, intentionalDrop: false);
+                        reloadAfterNoopSwitch = scopey.CurJobDef;
+                    }
+                },
+                new Phase
+                {
+                    // The deeper half: a switch SS refuses AT EQUIP TIME (blocked weapon)
+                    // still loses the prefix's EndCurrentJob — the postfix must restart the
+                    // reload instead of leaving the magazine empty until something notices.
+                    label = "a-blocked-switch-restarts-the-reload",
+                    deadlineTicks = 15000,
+                    arrange = () =>
+                    {
+                        scopey.drafter.Drafted = false;
+                        scopey.jobs.StopAll();
+                        // A third gun straight into the pack, BIOCODED TO SOMEONE ELSE:
+                        // SS's equip-time gate (canUseSidearmInstance) checks biocode and
+                        // role locks, NOT carry limits — a mere over-limit weapon sails
+                        // through it, which left this phase VOID on the first design.
+                        if (!scopey.inventory.innerContainer.Any(t => t.def == D("Gun_Autopistol")))
+                        {
+                            var extra = (ThingWithComps)ThingMaker.MakeThing(D("Gun_Autopistol"));
+                            extra.TryGetComp<CompBiocodable>()?.CodeFor(Colonist("Fency"));
+                            scopey.inventory.innerContainer.TryAdd(extra, canMergeWithExistingStacks: false);
+                        }
+                        ThingWithComps primary = scopey.equipment.Primary;
+                        CompAmmoUser user = primary.TryGetComp<CompAmmoUser>();
+                        user.CurMagCount = 0;
+                        Verse.AI.Job reload = user.TryMakeReloadJob();
+                        if (reload != null)
+                        {
+                            scopey.jobs.StartJob(reload, JobCondition.InterruptForced);
+                        }
+                    },
+                    checks =
+                    {
+                        P("reload-running-and-third-gun-blocked", () =>
+                        {
+                            bool reloading = scopey.CurJobDef == CE_JobDefOf.ReloadWeapon;
+                            ThingWithComps third = scopey.inventory.innerContainer
+                                .OfType<ThingWithComps>().FirstOrDefault(t => t.def == D("Gun_Autopistol"));
+                            bool blocked = third != null
+                                && !StatCalculator.canUseSidearmInstance(third, scopey, out string _)
+                                && !SSCore.Settings.AllowBlockedWeaponUse;
+                            return (reloading && blocked, $"job={scopey.CurJobDef?.defName ?? "none"} blocked={blocked}");
+                        }),
+                        C("switch-was-refused", () =>
+                            (!blockedSwitchResult, $"equipSpecificWeapon returned {blockedSwitchResult}")),
+                        C("reload-restarted-after-refusal", () =>
+                            (reloadAfterBlockedSwitch == CE_JobDefOf.ReloadWeapon,
+                             $"jobAfterCall={reloadAfterBlockedSwitch?.defName ?? "none"}")),
+                    },
+                    mutate = () =>
+                    {
+                        ThingWithComps third = scopey.inventory.innerContainer
+                            .OfType<ThingWithComps>().First(t => t.def == D("Gun_Autopistol"));
+                        blockedSwitchResult = WeaponAssingment.equipSpecificWeapon(scopey, third,
+                            dropCurrent: false, intentionalDrop: false);
+                        reloadAfterBlockedSwitch = scopey.CurJobDef;
+                    }
+                },
             };
         }
+
+        // Captured synchronously inside the two reload-guard phases.
+        private JobDef reloadAfterNoopSwitch;
+        private JobDef reloadAfterBlockedSwitch;
+        private bool blockedSwitchResult;
 
         // -- CETEST-4: axes 4 (NPC sidearm ammo) + 8 (one-use fallback) -----
 
@@ -1315,13 +1678,25 @@ namespace CESSCompatTestStaging
                 },
                 new Phase
                 {
-                    label = "generator-idempotence",
+                    label = "fresh-generation-provisions-ammo",
                     deadlineTicks = 4000,
                     mutate = () =>
                     {
+                        // Strip FIRST: the staged raiders were provisioned when the save
+                        // was created, and ForceRangedSidearm no-ops while a ranged
+                        // ammo-using sidearm exists — the old phase regenerated nothing and
+                        // passed with P04 disabled (caught by a scratch A/B). Destroying
+                        // the sidearms and their ammo forces a live generator pass through
+                        // the patch.
                         Pawn raider = Hostiles().FirstOrDefault(h => !(h.RaceProps?.IsMechanoid ?? false));
                         if (raider != null)
                         {
+                            foreach (Thing t in raider.inventory.innerContainer
+                                .Where(t => t.def.IsWeapon || t.def is CombatExtended.AmmoDef).ToList())
+                            {
+                                t.Destroy(DestroyMode.Vanish);
+                            }
+                            raider.TryGetComp<CompInventory>()?.UpdateInventory();
                             TestStagingComponent.ForceRangedSidearm(raider);
                         }
                     },

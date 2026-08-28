@@ -22,7 +22,8 @@ twenty simultaneously warming-up pawns against a 60fps frame:
 | build | overhead per call | % of frame @ 20 pawns |
 |---|---|---|
 | before the per-tick memo | +27.5 us | 3.30% |
-| current | +16.2 us | 1.95% |
+| invented hit proxy + memo | +16.2 us | 1.95% |
+| current (CE_Math.CalculateHitPercent + (weapon, distance) memo, 2026-08-28) | +10.9 us | 1.30% |
 
 Combat Extended's convention is to benchmark inside RimWorld rather than in a desktop
 harness (perkinslr, PR #4029) — hence the in-game runner rather than a unit benchmark.
@@ -88,14 +89,41 @@ Prepare, run, restored):
 - **P03 disabled** → cetest2: census FAIL, and both behavioral phases VOID — see
   the staging note below for why VOID and not FAIL.
 
-Known staging weakness (queue): the CETEST colonists have no CE loadout rows (or
-hold records) covering their staged kit, so any run that lingers past a phase
-deadline gives CE's own loadout enforcement time to strip whatever Simple
-Sidearms does not remember (observed: Picky stripped to bulk 0.0 during the P03
-scratch's long red windows; the rifle is not remembered, so P10 rightly does not
-protect it). Green runs never linger, so this only distorts *already-red* runs —
-but it turns a clean FAIL into a VOID cascade. Fix when next staging: give each
-CETEST colonist a CE loadout covering their kit.
+Known staging weaknesses (queue):
+
+- The CETEST colonists have no CE loadout rows (or hold records) covering their
+  staged kit, so any run that lingers past a phase deadline gives CE's own
+  loadout enforcement time to strip whatever Simple Sidearms does not remember
+  (observed: Picky stripped to bulk 0.0 during the P03 scratch's long red
+  windows). Green runs never linger, so this only distorts *already-red* runs —
+  but it turns a clean FAIL into a VOID cascade. Fix when next staging: give
+  each CETEST colonist a CE loadout covering their kit.
+- The cetest2 targeting hostile appears to include a mechanoid, which cannot be
+  disarmed (`DisarmHostiles` strips carried weapons only) — a lingering red run
+  still gets Picky shot. Same mitigation: red runs only.
+
+Suite lessons the phases now encode (2026-08-28, learned the hard way while
+landing the R2 fixes):
+
+- **Scores are inputs to behavior.** Replacing the invented hit proxy with CE's
+  real model (#19) changed which gun the staged raider drew, and it downed the
+  test subject in 3.5 game-seconds. A staged hostile that exists only as a
+  targeting reference must be disarmed (cetest2) or the subject parked out of
+  reach (cetest4).
+- **A flat scoring distance encodes the bug you fixed.** `pistol @ 20 cells`
+  only ever scored positive through stock SS's squared range gate; with the
+  corrected gate (#22/V2) an autopistol is out of range at 20. Score each gun
+  inside its own range.
+- **Tick-0 arranges lie.** Isolated runs fire arrange straight from LoadedGame;
+  CE's capacity stats and cached availables read as zeroes there, so capacity
+  predicates flip once the world starts ticking. Anything that depends on them
+  belongs in mutate behind a `world-is-ticking` precondition, and CE's cached
+  figures need `UpdateInventory()` after direct container inserts.
+- **Placed items can be forbidden.** SS's retrieval search skips forbidden
+  things; unforbid the resolved instance right before acting on it.
+- **SS memory is a multiset.** Three `InformOfAddedSidearm` calls mean three
+  entries, and the count-aware exemption honours all three — normalize memory
+  before asserting per-copy semantics.
 Coverage highlights beyond the manual checklist: axis-5 direct unit hit (SS switch
 entry point invoked DURING a live CE reload job — reload survived), axis-8 full
 chain (a one-use weapon actually fired at a ground cell, consumption →
