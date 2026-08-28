@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
 using SimpleSidearms.rimworld;
@@ -13,11 +14,30 @@ namespace CESimpleSidearmsCompat.Patches
     /// CE. After SS generates, load every ammo-using inventory weapon and stock spare
     /// magazines, respecting CE inventory capacity.
     /// </summary>
-    [HarmonyPatch(typeof(PawnSidearmsGenerator), nameof(PawnSidearmsGenerator.TryGenerateSidearmFor))]
+    [HarmonyPatch(typeof(PawnSidearmsGenerator), nameof(PawnSidearmsGenerator.TryGenerateSidearmFor),
+                  new[] { typeof(Pawn), typeof(float), typeof(float), typeof(PawnGenerationRequest) })]
     public static class PawnSidearmsGenerator_TryGenerateSidearmFor_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(PawnSidearmsGenerator), "TryGenerateSidearmFor",
+            new[] { typeof(Pawn), typeof(float), typeof(float), typeof(PawnGenerationRequest) },
+            "NPC sidearms will spawn with empty magazines and no spare ammo.");
+
         [HarmonyPostfix]
         public static void Postfix(Pawn pawn, bool __result)
+        {
+            try
+            {
+                PostfixInner(pawn, __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Loading generated NPC sidearms failed; they "
+                              + "spawn with empty magazines. " + e, 0x43455307);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PostfixInner(Pawn pawn, bool __result)
         {
             if (!__result || pawn?.inventory?.innerContainer == null)
             {

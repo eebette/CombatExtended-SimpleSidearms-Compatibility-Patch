@@ -1,3 +1,5 @@
+using System;
+using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
 using Verse;
@@ -17,11 +19,30 @@ namespace CESimpleSidearmsCompat.Patches
     /// button, and — because CE deletes picked-up records whose def has left the
     /// inventory container — churned a create/delete cycle for equipped weapons.
     /// </summary>
-    [HarmonyPatch(typeof(Utility_HoldTracker), nameof(Utility_HoldTracker.GetExcessThing))]
+    [HarmonyPatch(typeof(Utility_HoldTracker), nameof(Utility_HoldTracker.GetExcessThing),
+                  new[] { typeof(Pawn), typeof(Thing), typeof(int) },
+                  new[] { ArgumentType.Normal, ArgumentType.Out, ArgumentType.Out })]
     public static class Utility_HoldTracker_GetExcessThing_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(Utility_HoldTracker), "GetExcessThing",
+            new[] { typeof(Pawn), typeof(Thing).MakeByRefType(), typeof(int).MakeByRefType() },
+            "CE loadout enforcement will drop remembered sidearms from inventory (drop/retrieve churn).");
+
         [HarmonyPostfix]
         public static void Postfix(Pawn pawn, ref Thing dropThing, ref int dropCount, ref bool __result)
+        {
+            try
+            {
+                PostfixInner(pawn, ref dropThing, ref dropCount, ref __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Remembered-sidearm drop exemption failed. " + e, 0x4345530E);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PostfixInner(Pawn pawn, ref Thing dropThing, ref int dropCount, ref bool __result)
         {
             if (!__result || dropThing == null || !dropThing.def.IsWeapon)
             {
@@ -36,11 +57,30 @@ namespace CESimpleSidearmsCompat.Patches
         }
     }
 
-    [HarmonyPatch(typeof(Utility_HoldTracker), nameof(Utility_HoldTracker.GetExcessEquipment))]
+    [HarmonyPatch(typeof(Utility_HoldTracker), nameof(Utility_HoldTracker.GetExcessEquipment),
+                  new[] { typeof(Pawn), typeof(ThingWithComps) },
+                  new[] { ArgumentType.Normal, ArgumentType.Out })]
     public static class Utility_HoldTracker_GetExcessEquipment_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(Utility_HoldTracker), "GetExcessEquipment",
+            new[] { typeof(Pawn), typeof(ThingWithComps).MakeByRefType() },
+            "CE loadout enforcement will strip remembered equipped weapons.");
+
         [HarmonyPostfix]
         public static void Postfix(Pawn pawn, ref ThingWithComps dropEquipment, ref bool __result)
+        {
+            try
+            {
+                PostfixInner(pawn, ref dropEquipment, ref __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Remembered-equipment drop exemption failed. " + e, 0x4345530F);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PostfixInner(Pawn pawn, ref ThingWithComps dropEquipment, ref bool __result)
         {
             if (!__result || dropEquipment == null)
             {

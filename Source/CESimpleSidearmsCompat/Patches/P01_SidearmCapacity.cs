@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
 using PeteTimesSix.SimpleSidearms.Utilities;
@@ -18,11 +19,31 @@ namespace CESimpleSidearmsCompat.Patches
     /// fetches remembered weapons on its own from the vanilla think tree, asks nothing at
     /// all — its pickup driver ends in a bare innerContainer.TryAdd. Both are patched here.
     /// </summary>
-    [HarmonyPatch(typeof(StatCalculator), nameof(StatCalculator.CanPickupSidearmType))]
+    [HarmonyPatch(typeof(StatCalculator), nameof(StatCalculator.CanPickupSidearmType),
+                  new[] { typeof(ThingDefStuffDefPair), typeof(Pawn), typeof(string) },
+                  new[] { ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Out })]
     public static class StatCalculator_CanPickupSidearmType_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(StatCalculator), "CanPickupSidearmType",
+            new[] { typeof(ThingDefStuffDefPair), typeof(Pawn), typeof(string).MakeByRefType() },
+            "sidearm pickup will ignore Combat Extended's bulk capacity.");
+
         [HarmonyPostfix]
         public static void Postfix(ThingDefStuffDefPair sidearmType, Pawn pawn, ref string errString, ref bool __result)
+        {
+            try
+            {
+                PostfixInner(sidearmType, pawn, ref errString, ref __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Bulk capacity check failed; sidearm pickup "
+                              + "falls back to weight-only limits. " + e, 0x43455301);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PostfixInner(ThingDefStuffDefPair sidearmType, Pawn pawn, ref string errString, ref bool __result)
         {
             if (!__result || pawn == null || sidearmType.thing == null)
             {
@@ -59,20 +80,13 @@ namespace CESimpleSidearmsCompat.Patches
     /// can find an instance for, so cancelling the job here also skips every memory behind
     /// it in the list, and the refused weapon is re-searched on each think pass.
     /// </summary>
-    [HarmonyPatch(typeof(JobGiver_RetrieveWeapon), nameof(JobGiver_RetrieveWeapon.TryGiveJobStatic))]
+    [HarmonyPatch(typeof(JobGiver_RetrieveWeapon), nameof(JobGiver_RetrieveWeapon.TryGiveJobStatic),
+                  new[] { typeof(Pawn), typeof(bool) })]
     public static class JobGiver_RetrieveWeapon_TryGiveJobStatic_Patch
     {
-        public static bool Prepare()
-        {
-            if (AccessTools.Method(typeof(JobGiver_RetrieveWeapon), "TryGiveJobStatic",
-                                   new[] { typeof(Pawn), typeof(bool) }) != null)
-            {
-                return true;
-            }
-            Log.Error("[CE-SS Compat] JobGiver_RetrieveWeapon.TryGiveJobStatic not found — sidearm "
-                      + "retrieval will not be capacity-checked. Simple Sidearms probably moved it.");
-            return false;
-        }
+        public static bool Prepare() => PatchGuard.Require(typeof(JobGiver_RetrieveWeapon), "TryGiveJobStatic",
+            new[] { typeof(Pawn), typeof(bool) },
+            "sidearm retrieval will not be capacity-checked.");
 
         [HarmonyPostfix]
         public static void Postfix(Pawn pawn, ref Job __result)
@@ -83,22 +97,28 @@ namespace CESimpleSidearmsCompat.Patches
             }
             try
             {
-                Thing target = __result.targetA.Thing;
-                CompInventory inventory = pawn?.TryGetComp<CompInventory>();
-                if (target == null || inventory == null)
-                {
-                    return;
-                }
-                if (!inventory.CanFitInInventory(target, out int _))
-                {
-                    __result = null;
-                }
+                PostfixInner(pawn, ref __result);
             }
             catch (Exception e)
             {
                 // Reached from the think tree and from SS's AutoUndrafter every 100 ticks;
                 // a throw here would be a flood, so leave SS's job untouched instead.
-                Log.ErrorOnce("[CE-SS Compat] Capacity check on sidearm retrieval failed: " + e, 0x43455352);
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Capacity check on sidearm retrieval failed: " + e, 0x43455352);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PostfixInner(Pawn pawn, ref Job __result)
+        {
+            Thing target = __result.targetA.Thing;
+            CompInventory inventory = pawn?.TryGetComp<CompInventory>();
+            if (target == null || inventory == null)
+            {
+                return;
+            }
+            if (!inventory.CanFitInInventory(target, out int _))
+            {
+                __result = null;
             }
         }
     }

@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
 using PeteTimesSix.SimpleSidearms;
@@ -24,14 +25,35 @@ namespace CESimpleSidearmsCompat.Patches
     /// WeaponAssingment_equipSpecificWeapon_DryRun) and its answer is handed back to CE as a
     /// candidate filter — CE's own job branch does the rest.
     /// </summary>
-    [HarmonyPatch(typeof(CompInventory), nameof(CompInventory.SwitchToNextViableWeapon))]
+    [HarmonyPatch(typeof(CompInventory), nameof(CompInventory.SwitchToNextViableWeapon),
+                  new[] { typeof(bool), typeof(bool), typeof(bool), typeof(Func<ThingWithComps, CompAmmoUser, bool>) })]
     public static class CompInventory_SwitchToNextViableWeapon_Patch
     {
         private static bool inSSEquip;
 
+        public static bool Prepare() => PatchGuard.Require(typeof(CompInventory), "SwitchToNextViableWeapon",
+            new[] { typeof(bool), typeof(bool), typeof(bool), typeof(Func<ThingWithComps, CompAmmoUser, bool>) },
+            "weapon switching after a loss or one-use consumption will ignore Simple Sidearms preferences.");
+
         [HarmonyPrefix]
         public static bool Prefix(CompInventory __instance, bool useFists, bool useAOE, bool stopJob,
                                   Func<ThingWithComps, CompAmmoUser, bool> predicate, ref bool __result)
+        {
+            try
+            {
+                return PrefixInner(__instance, useFists, useAOE, stopJob, predicate, ref __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Switch arbitration failed; Combat Extended "
+                              + "picks the replacement weapon on its own. " + e, 0x4345530D);
+                return true;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool PrefixInner(CompInventory __instance, bool useFists, bool useAOE, bool stopJob,
+                                        Func<ThingWithComps, CompAmmoUser, bool> predicate, ref bool __result)
         {
             if (inSSEquip || useAOE || predicate != null)
             {
@@ -140,9 +162,14 @@ namespace CESimpleSidearmsCompat.Patches
     ///
     /// Only active inside AskSS, for one pawn, for the duration of one synchronous call.
     /// </summary>
-    [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipSpecificWeapon))]
+    [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipSpecificWeapon),
+                  new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) })]
     public static class WeaponAssingment_equipSpecificWeapon_DryRun
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
+            new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
+            "asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.");
+
         private static Pawn askingFor;
         private static ThingWithComps answer;
         private static bool answered;

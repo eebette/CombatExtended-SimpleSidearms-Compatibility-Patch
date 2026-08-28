@@ -1,3 +1,5 @@
+using System;
+using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
 using PeteTimesSix.SimpleSidearms.Utilities;
@@ -17,11 +19,31 @@ namespace CESimpleSidearmsCompat.Patches
     /// and reads a false return as "no weapon drawn" — which also skips the retaliation
     /// job, so blanket suppression left a reloading pawn standing there being stabbed.
     /// </summary>
-    [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipBestWeaponFromInventoryByPreference))]
+    [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipBestWeaponFromInventoryByPreference),
+                  new[] { typeof(Pawn), typeof(DroppingModeEnum), typeof(PrimaryWeaponMode?), typeof(Pawn) })]
     public static class WeaponAssingment_equipBestByPreference_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipBestWeaponFromInventoryByPreference",
+            new[] { typeof(Pawn), typeof(DroppingModeEnum), typeof(PrimaryWeaponMode?), typeof(Pawn) },
+            "Simple Sidearms' automatic swaps can cancel a Combat Extended reload mid-way.");
+
         [HarmonyPrefix]
         public static bool Prefix(Pawn pawn, DroppingModeEnum dropMode, PrimaryWeaponMode? modeOverride)
+        {
+            try
+            {
+                return PrefixInner(pawn, dropMode, modeOverride);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Reload guard on preference swaps failed; swaps "
+                              + "run unguarded. " + e, 0x43455308);
+                return true;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool PrefixInner(Pawn pawn, DroppingModeEnum dropMode, PrimaryWeaponMode? modeOverride)
         {
             if (pawn?.CurJobDef != CE_JobDefOf.ReloadWeapon)
             {
@@ -34,11 +56,29 @@ namespace CESimpleSidearmsCompat.Patches
         }
     }
 
-    [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipSpecificWeapon))]
+    [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipSpecificWeapon),
+                  new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) })]
     public static class WeaponAssingment_equipSpecificWeapon_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
+            new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
+            "explicit weapon switches during a reload will not end the reload job cleanly first.");
+
         [HarmonyPrefix]
         public static void Prefix(Pawn pawn)
+        {
+            try
+            {
+                PrefixInner(pawn);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Reload hand-off on explicit switches failed. " + e, 0x43455309);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PrefixInner(Pawn pawn)
         {
             if (pawn?.CurJobDef == CE_JobDefOf.ReloadWeapon)
             {

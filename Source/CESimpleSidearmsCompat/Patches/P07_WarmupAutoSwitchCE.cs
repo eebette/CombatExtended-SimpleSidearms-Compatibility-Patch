@@ -1,3 +1,5 @@
+using System;
+using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
 using PeteTimesSix.SimpleSidearms;
@@ -16,11 +18,28 @@ namespace CESimpleSidearmsCompat.Patches
     /// vanilla Verb_Shoot, so it is silently dead under CE (Verb_ShootCE). Replicates SS's
     /// Stance_Warmup postfix for CE shoot verbs, reusing SS's own helpers and settings.
     /// </summary>
-    [HarmonyPatch(typeof(Stance_Warmup), nameof(Stance_Warmup.StanceTick))]
+    [HarmonyPatch(typeof(Stance_Warmup), nameof(Stance_Warmup.StanceTick), new Type[0])]
     public static class Stance_Warmup_StanceTick_CE_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(Stance_Warmup), "StanceTick", new Type[0],
+            "mid-warmup switches to a more accurate ranged weapon stay dead under CE.");
+
         [HarmonyPostfix]
         public static void Postfix(Stance_Warmup __instance)
+        {
+            try
+            {
+                PostfixInner(__instance);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Warmup auto-switch failed; mid-combat weapon "
+                              + "upgrades are off. " + e, 0x4345530B);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PostfixInner(Stance_Warmup __instance)
         {
             if (!SSCore.Settings.RangedCombatAutoSwitch)
             {

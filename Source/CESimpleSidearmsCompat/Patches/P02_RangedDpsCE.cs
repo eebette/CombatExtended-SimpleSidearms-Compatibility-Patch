@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using CombatExtended;
 using HarmonyLib;
 using PeteTimesSix.SimpleSidearms.Utilities;
@@ -111,14 +112,32 @@ namespace CESimpleSidearmsCompat.Patches
         }
     }
 
-    [HarmonyPatch(typeof(StatCalculator), nameof(StatCalculator.RangedSpeed))]
+    [HarmonyPatch(typeof(StatCalculator), nameof(StatCalculator.RangedSpeed),
+                  new[] { typeof(ThingWithComps) })]
     public static class StatCalculator_RangedSpeed_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(StatCalculator), "RangedSpeed",
+            new[] { typeof(ThingWithComps) },
+            "reload downtime will not count against a weapon's rating.");
 
         // Fold reload downtime into the cycle time so slow-reloading weapons rank lower.
         // Also feeds SS's AverageSpeedRanged, keeping the bias baseline consistent.
         [HarmonyPostfix]
         public static void Postfix(ThingWithComps weapon, ref float __result)
+        {
+            try
+            {
+                PostfixInner(weapon, ref __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Reload-time scoring failed; weapon speed "
+                              + "ratings fall back to Simple Sidearms' own figure. " + e, 0x43455302);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void PostfixInner(ThingWithComps weapon, ref float __result)
         {
             CompAmmoUser ammoUser = weapon?.TryGetComp<CompAmmoUser>();
             if (ammoUser == null)
@@ -144,7 +163,8 @@ namespace CESimpleSidearmsCompat.Patches
         }
     }
 
-    [HarmonyPatch(typeof(StatCalculator), nameof(StatCalculator.RangedDPS))]
+    [HarmonyPatch(typeof(StatCalculator), nameof(StatCalculator.RangedDPS),
+                  new[] { typeof(ThingWithComps), typeof(float), typeof(float), typeof(float) })]
     public static class StatCalculator_RangedDPS_Patch
     {
         /// <summary>CE caps the shooting-accuracy term here (Verb_LaunchProjectileCE.ShootingAccuracy).</summary>
@@ -157,8 +177,27 @@ namespace CESimpleSidearmsCompat.Patches
         /// </summary>
         internal const float NoTargetReferenceDistance = 20f;
 
+        public static bool Prepare() => PatchGuard.Require(typeof(StatCalculator), "RangedDPS",
+            new[] { typeof(ThingWithComps), typeof(float), typeof(float), typeof(float) },
+            "Simple Sidearms will rank CE guns by their vanilla stats, which are mostly zeroes.");
+
         [HarmonyPrefix]
         public static bool Prefix(ThingWithComps weapon, float speedBias, float averageSpeed, float distance, ref float __result)
+        {
+            try
+            {
+                return PrefixInner(weapon, speedBias, averageSpeed, distance, ref __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "CE-model DPS scoring failed; Simple Sidearms' "
+                              + "vanilla formula is used instead. " + e, 0x43455303);
+                return true;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool PrefixInner(ThingWithComps weapon, float speedBias, float averageSpeed, float distance, ref float __result)
         {
             if (!CompatUtil.IsCEGun(weapon, out CompAmmoUser ammoUser))
             {
@@ -228,11 +267,31 @@ namespace CESimpleSidearmsCompat.Patches
         }
     }
 
-    [HarmonyPatch(typeof(StatCalculator), nameof(StatCalculator.RangedDPSAverage))]
+    [HarmonyPatch(typeof(StatCalculator), nameof(StatCalculator.RangedDPSAverage),
+                  new[] { typeof(ThingWithComps), typeof(float), typeof(float) })]
     public static class StatCalculator_RangedDPSAverage_Patch
     {
+        public static bool Prepare() => PatchGuard.Require(typeof(StatCalculator), "RangedDPSAverage",
+            new[] { typeof(ThingWithComps), typeof(float), typeof(float) },
+            "Simple Sidearms' no-target weapon ranking will use vanilla stats for CE guns.");
+
         [HarmonyPrefix]
         public static bool Prefix(ThingWithComps weapon, float speedBias, float averageSpeed, ref float __result)
+        {
+            try
+            {
+                return PrefixInner(weapon, speedBias, averageSpeed, ref __result);
+            }
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "CE-model average-DPS scoring failed; Simple "
+                              + "Sidearms' vanilla formula is used instead. " + e, 0x43455304);
+                return true;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool PrefixInner(ThingWithComps weapon, float speedBias, float averageSpeed, ref float __result)
         {
             if (!CompatUtil.IsCEGun(weapon, out CompAmmoUser ammoUser))
             {
