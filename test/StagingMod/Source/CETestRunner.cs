@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Linq;
 using System.Text;
 using CombatExtended;
+using HarmonyLib;
+using PeteTimesSix.SimpleSidearms;
 using PeteTimesSix.SimpleSidearms.Utilities;
 using RimWorld;
 using SimpleSidearms.rimworld;
@@ -56,7 +59,18 @@ namespace CESSCompatTestStaging
         {
             public string name;
             public Func<(bool pass, string detail)> eval;
-            public bool informational;
+            public bool informational; // recorded, never fails the run
+            // Must-not-happen. Re-evaluated on every poll instead of latching on first pass,
+            // and a failure fails the phase immediately rather than waiting for the deadline.
+            // Without this a negative check passes at tick 0 — before the thing it forbids
+            // could have happened — and is never looked at again.
+            public bool negative;
+            // Something the phase needs to be TRUE before its real checks mean anything —
+            // the pawn is carrying the weapon, the raiders are on the map, the magazine is
+            // loaded. A phase whose precondition never holds is reported INVALID rather than
+            // passed or failed: it did not test what it claims to, and that is a different
+            // problem from the code being wrong.
+            public bool precondition;
             public bool passed;
             public string lastDetail = "not evaluated";
         }
@@ -64,14 +78,105 @@ namespace CESSCompatTestStaging
         private class Phase
         {
             public string label;
+            // Establishes everything this phase depends on, so it inherits nothing from the
+            // phases before it. Runs once, before mutate. Paired with precondition checks:
+            // arrange makes it so, the preconditions prove it.
+            public Action arrange;
             public Action mutate;
             public List<Check> checks = new List<Check>();
             public int deadlineTicks;
+            // Phase cannot complete before this. The observation window a negative check has
+            // to hold across, and the settle time for informational checks.
             public int minTicks;
+            // Runs on every poll after the act, for phases whose scenario needs driving
+            // rather than waiting.
+            public Action poll;
             public bool failed;
+            public bool invalid;   // a precondition never held; the phase proved nothing
+            // mutate is deferred until every precondition holds. Firing it immediately after
+            // arrange means firing it into a world that has not caught up.
+            public bool mutated;
+            public string diagnostic;  // an unexpected error or warning seen during it
+        }
+
+        /// <summary>
+        /// Diagnostics we have accounted for and decided are not ours. Everything else — any
+        /// Error from any mod, any Warning not listed here — fails the phase it appeared in.
+        ///
+        /// Errors from CE or Simple Sidearms count against us on purpose: this mod exists to
+        /// make the two work together, and breaking one of them is the most consequential
+        /// thing it can do. Each entry below has to be justified, not just observed.
+        /// </summary>
+        private static readonly string[] ExpectedDiagnostics =
+        {
+            // Simple Sidearms sweeps its own memory on load and says so. Not provoked by us:
+            // it fires on a save this mod has never touched.
+            "had a null weapon memory, removing",
+            "had a missing def or malformed data, removing",
+            // The harness's own lines — NOT a blanket prefix. The runner's "threw:" reports
+            // fail their own phase directly at the catch sites, so listing them here loses
+            // nothing; it only stops the report bleeding into the NEXT phase's scan.
+            "[CETest] Phase ",
+            "[CETest] poll for ",
+            "[CETest] Mutation for phase ",
+            "[CETest] Setup for phase ",
+            "[CETest] Isolated run",
+            "[CETest] Results written",
+            "[CETest] Scenario complete",
+            "[CETest] Loadouts module",
+            "[CETestStaging]",
+            // RimBridge logs startup telemetry at Warning level and its startup straddles
+            // the log baseline. Development tool, not shipped, nothing here provokes it.
+            "[RimBridge] STARTUP_TIMING",
+        };
+
+        private readonly HashSet<string> seenDiagnostics = new HashSet<string>();
+
+        /// <summary>
+        /// Everything already in the log when the scenario starts is somebody else's: mod
+        /// metadata complaints, startup telemetry, whatever the profile's other mods say on
+        /// their way up. Only what the run provokes can be attributed to it.
+        /// </summary>
+        private void BaselineDiagnostics()
+        {
+            foreach (LogMessage msg in Log.Messages)
+            {
+                seenDiagnostics.Add(msg.text ?? "");
+            }
+            Log.Message($"[CETest] Diagnostics baselined at {seenDiagnostics.Count} pre-existing message(s).");
+        }
+
+        /// <summary>
+        /// Returns the first unaccounted-for error or warning since the last call.
+        /// Log.Messages is a capped queue, so this reads the whole of it every poll and
+        /// remembers what it has already reported rather than tracking an index the queue
+        /// can invalidate underneath it.
+        /// </summary>
+        private string NewDiagnostic()
+        {
+            foreach (LogMessage msg in Log.Messages)
+            {
+                if (msg.type != LogMessageType.Error && msg.type != LogMessageType.Warning)
+                {
+                    continue;
+                }
+                string text = msg.text ?? "";
+                if (!seenDiagnostics.Add(text))
+                {
+                    continue;
+                }
+                if (ExpectedDiagnostics.Any(e => text.Contains(e)))
+                {
+                    continue;
+                }
+                return $"{msg.type}: {text.Split('\n')[0]}";
+            }
+            return null;
         }
 
         private List<Phase> phases;
+        private int isolatedPhase = -1;
+        private int totalPhaseCount;
         private int phaseIndex = -1;
         private int phaseStartTick;
         private string scenario;
@@ -89,12 +194,40 @@ namespace CESSCompatTestStaging
             {
                 return;
             }
+            // "cetest1:2" runs phase 2 and nothing else, in its own process against a freshly
+            // loaded save. The sequenced run proves the phases work against accumulated
+            // state; this proves each one stands on its own.
+            int colon = scenario.IndexOf(':');
+            if (colon > 0 && int.TryParse(scenario.Substring(colon + 1), out int only))
+            {
+                isolatedPhase = only;
+                scenario = scenario.Substring(0, colon);
+            }
             LongEventHandler.ExecuteWhenFinished(() =>
             {
                 try
                 {
                     DisableLoadoutsModule();
                     phases = BuildScenario(scenario);
+                    // Every phase carries the state dump; forgetting to add it per-phase is
+                    // exactly the kind of omission it exists to catch.
+                    string nick = ScenarioPawn(scenario);
+                    foreach (Phase ph in phases)
+                    {
+                        if (!ph.checks.Any(c => c.name == "state"))
+                        {
+                            ph.checks.Add(State(nick));
+                        }
+                    }
+                    totalPhaseCount = phases.Count;
+                    if (isolatedPhase >= 0)
+                    {
+                        phases = isolatedPhase < totalPhaseCount
+                            ? new List<Phase> { phases[isolatedPhase] }
+                            : new List<Phase>();
+                        Log.Message($"[CETest] Isolated run: phase {isolatedPhase} of {totalPhaseCount}"
+                                    + (phases.Count == 0 ? " — out of range." : $" ('{phases[0].label}')."));
+                    }
                 }
                 catch (Exception e)
                 {
@@ -103,6 +236,7 @@ namespace CESSCompatTestStaging
                     Root.Shutdown();
                     return;
                 }
+                BaselineDiagnostics();
                 active = true;
                 Find.TickManager.CurTimeSpeed = TimeSpeed.Superfast;
                 Log.Message($"[CETest] Scenario '{scenario}' started, {phases.Count} phases.");
@@ -119,21 +253,35 @@ namespace CESSCompatTestStaging
         {
             try
             {
-                Type mod = GenTypes.GetTypeInAnyAssembly("CESidearmsSupply.SupplyMod");
+                bool loadoutsActive = ModsConfig.IsActive("eebette.CESimpleSidearmsCompat.Loadouts");
+                Type mod = GenTypes.GetTypeInAnyAssembly("CESimpleSidearmsCompat.Loadouts.LoadoutsMod");
                 object settings = mod?.GetProperty("Settings")?.GetValue(null);
                 if (settings == null)
                 {
+                    if (loadoutsActive)
+                    {
+                        // The mod is in the list but the reflection missed — a silent return
+                        // here means every CETEST scenario runs with the Loadouts projections
+                        // still active, which is exactly the contamination this method exists
+                        // to prevent. Fail loud so a rename breaks the suite, not the results.
+                        Log.Error("[CETest] Loadouts module is ACTIVE but its settings type was not "
+                                  + "found (renamed again?) — scenarios are contaminated by its patches.");
+                    }
                     return;
                 }
-                foreach (string field in new[] { "loadoutWeaponsAsSidearms", "ammoForAllRemembered", "refetchAllRemembered" })
+                FieldInfo field = settings.GetType().GetField("loadoutWeaponsAsSidearms");
+                if (field == null)
                 {
-                    settings.GetType().GetField(field)?.SetValue(settings, false);
+                    Log.Error("[CETest] Loadouts settings found but 'loadoutWeaponsAsSidearms' is gone — "
+                              + "cannot switch the module off; scenarios are contaminated by its patches.");
+                    return;
                 }
-                Log.Message("[CETest] Loadouts module derivations disabled for this run.");
+                field.SetValue(settings, false);
+                Log.Message("[CETest] Loadouts module switched off (in-memory) for this run.");
             }
             catch (Exception e)
             {
-                Log.Warning("[CETest] Could not disable Loadouts module: " + e.Message);
+                Log.Error("[CETest] Could not disable Loadouts module — scenarios may be contaminated: " + e.Message);
             }
         }
 
@@ -153,11 +301,62 @@ namespace CESSCompatTestStaging
                 return;
             }
 
+            if (phases.Count == 0)
+            {
+                Finish();
+                return;
+            }
             Phase phase = phases[phaseIndex];
+
+            // Any unaccounted-for error or warning, from this mod or from CE or SS, fails
+            // the phase it appeared in. Checked first: a phase that provoked a red error has
+            // not passed, whatever its assertions say.
+            string diagnostic = NewDiagnostic();
+            if (diagnostic != null)
+            {
+                phase.failed = true;
+                phase.diagnostic = diagnostic;
+                Log.Warning($"[CETest] Phase '{phase.label}' FAILED on an unexpected diagnostic: {diagnostic}");
+                AdvancePhase();
+                return;
+            }
+
+            // Poll BEFORE the checks, so the state the checks evaluate includes the last
+            // action the phase drove.
+            if (phase.mutated)
+            {
+                try
+                {
+                    phase.poll?.Invoke();
+                }
+                catch (Exception e)
+                {
+                    Log.Error($"[CETest] poll for '{phase.label}' threw: " + e);
+                    // A phase whose driver is dead is not observing anything — failing it
+                    // beats silently degrading its driven window to a passive one.
+                    phase.failed = true;
+                    AdvancePhase();
+                    return;
+                }
+            }
+
             bool allPass = true;
+            bool preconditionsHold = true;
+            Check tripped = null;
             foreach (Check check in phase.checks)
             {
-                if (check.passed && !check.informational)
+                // Nothing but a precondition may be evaluated before the act. Without this
+                // an outcome check runs against the freshly-arranged world — where it is
+                // often trivially true — and latches there.
+                if (!phase.mutated && !check.precondition)
+                {
+                    continue;
+                }
+                // Informational checks re-evaluate until the phase ends (their last
+                // observation is what gets reported) and never gate advancement. Negative
+                // checks re-evaluate because a must-not-happen that passes now can still
+                // fail later — latching them is what makes them vacuous.
+                if (check.passed && !check.informational && !check.negative)
                 {
                     continue;
                 }
@@ -169,6 +368,14 @@ namespace CESSCompatTestStaging
                     if (!pass && !check.informational)
                     {
                         allPass = false;
+                        if (check.precondition)
+                        {
+                            preconditionsHold = false;
+                        }
+                        else if (check.negative)
+                        {
+                            tripped = check;
+                        }
                     }
                 }
                 catch (Exception e)
@@ -177,10 +384,57 @@ namespace CESSCompatTestStaging
                     if (!check.informational)
                     {
                         allPass = false;
+                        if (check.precondition)
+                        {
+                            // A throwing precondition means the world was never ready — the
+                            // phase must report VOID (tested nothing), not FAIL (blaming the
+                            // product for a broken setup).
+                            preconditionsHold = false;
+                        }
                     }
                 }
             }
 
+            // Preconditions hold and the act has not happened yet: this is the moment the
+            // world is ready for it.
+            if (preconditionsHold && !phase.mutated)
+            {
+                phase.mutated = true;
+                phaseStartTick = tick;   // the observation window starts from the act
+                try
+                {
+                    phase.mutate?.Invoke();
+                }
+                catch (Exception e)
+                {
+                    Log.Error($"[CETest] Mutation for phase '{phase.label}' threw: " + e);
+                    phase.failed = true;
+                    AdvancePhase();
+                }
+                return;
+            }
+            // Nothing the phase asserts means anything until its act has happened.
+            if (!phase.mutated)
+            {
+                if (tick - phaseStartTick > phase.deadlineTicks)
+                {
+                    phase.invalid = true;
+                    Log.Warning($"[CETest] Phase '{phase.label}' INVALID — preconditions never held: "
+                                + string.Join(", ", phase.checks.Where(c => c.precondition && !c.passed)
+                                                         .Select(c => $"{c.name} ({c.lastDetail})")));
+                    AdvancePhase();
+                }
+                return;
+            }
+
+            if (tripped != null && preconditionsHold)
+            {
+                phase.failed = true;
+                Log.Warning($"[CETest] Phase '{phase.label}' FAILED: '{tripped.name}' must not happen "
+                            + $"but did at tick {tick} — {tripped.lastDetail}");
+                AdvancePhase();
+                return;
+            }
             if (tick - phaseStartTick < phase.minTicks)
             {
                 return;
@@ -192,8 +446,17 @@ namespace CESSCompatTestStaging
             }
             else if (tick - phaseStartTick > phase.deadlineTicks)
             {
-                phase.failed = true;
-                Log.Warning($"[CETest] Phase '{phase.label}' FAILED (deadline {phase.deadlineTicks} ticks).");
+                // A phase whose preconditions never held did not test what it claims to.
+                // That is a broken test, not broken code, and conflating the two is how a
+                // suite quietly stops meaning anything.
+                phase.invalid = !preconditionsHold;
+                phase.failed = !phase.invalid;
+                string why = phase.invalid
+                    ? "INVALID — preconditions never held: "
+                      + string.Join(", ", phase.checks.Where(c => c.precondition && !c.passed)
+                                               .Select(c => $"{c.name} ({c.lastDetail})"))
+                    : $"FAILED (deadline {phase.deadlineTicks} ticks).";
+                Log.Warning($"[CETest] Phase '{phase.label}' {why}");
                 AdvancePhase();
             }
         }
@@ -210,11 +473,17 @@ namespace CESSCompatTestStaging
             phaseStartTick = Find.TickManager.TicksGame;
             try
             {
-                phase.mutate?.Invoke();
+                // Arrange only. mutate waits for the preconditions to hold — see Phase.mutated.
+                phase.arrange?.Invoke();
+                if (!phase.checks.Any(c => c.precondition))
+                {
+                    phase.mutate?.Invoke();
+                    phase.mutated = true;
+                }
             }
             catch (Exception e)
             {
-                Log.Error($"[CETest] Mutation for phase '{phase.label}' threw: " + e);
+                Log.Error($"[CETest] Setup for phase '{phase.label}' threw: " + e);
                 phase.failed = true;
                 foreach (Check c in phase.checks)
                 {
@@ -237,7 +506,12 @@ namespace CESSCompatTestStaging
             var sb = new StringBuilder();
             sb.Append("{\n");
             sb.Append($"  \"scenario\": \"{scenario}\",\n");
-            bool overall = crashed == null && phases != null && phases.All(p => !p.failed);
+            sb.Append($"  \"phaseCount\": {totalPhaseCount},\n");
+            if (isolatedPhase >= 0)
+            {
+                sb.Append($"  \"isolatedPhase\": {isolatedPhase},\n");
+            }
+            bool overall = crashed == null && phases != null && phases.All(p => !p.failed && !p.invalid);
             sb.Append($"  \"passed\": {(overall ? "true" : "false")},\n");
             if (crashed != null)
             {
@@ -252,7 +526,12 @@ namespace CESSCompatTestStaging
                     Phase p = phases[i];
                     sb.Append("    {\n");
                     sb.Append($"      \"label\": \"{Escape(p.label)}\",\n");
-                    sb.Append($"      \"passed\": {((!p.failed) ? "true" : "false")},\n");
+                    sb.Append($"      \"passed\": {((!p.failed && !p.invalid) ? "true" : "false")},\n");
+                    sb.Append($"      \"invalid\": {(p.invalid ? "true" : "false")},\n");
+                    if (p.diagnostic != null)
+                    {
+                        sb.Append($"      \"diagnostic\": \"{Escape(p.diagnostic)}\",\n");
+                    }
                     sb.Append($"      \"reached\": {(i <= phaseIndex ? "true" : "false")},\n");
                     sb.Append("      \"checks\": [\n");
                     for (int j = 0; j < p.checks.Count; j++)
@@ -262,6 +541,7 @@ namespace CESSCompatTestStaging
                         sb.Append($"\"name\": \"{Escape(c.name)}\", ");
                         sb.Append($"\"passed\": {(c.passed ? "true" : "false")}, ");
                         sb.Append($"\"informational\": {(c.informational ? "true" : "false")}, ");
+                        sb.Append($"\"precondition\": {(c.precondition ? "true" : "false")}, ");
                         sb.Append($"\"detail\": \"{Escape(c.lastDetail)}\"");
                         sb.Append("}");
                         sb.Append(j < p.checks.Count - 1 ? ",\n" : "\n");
@@ -271,7 +551,8 @@ namespace CESSCompatTestStaging
                 }
             }
             sb.Append("  ]\n}\n");
-            string path = Path.Combine(GenFilePaths.SaveDataFolderPath, $"test-results-{scenario}.json");
+            string suffix = isolatedPhase >= 0 ? $"-iso-{isolatedPhase:D2}" : "";
+            string path = Path.Combine(GenFilePaths.SaveDataFolderPath, $"test-results-{scenario}{suffix}.json");
             File.WriteAllText(path, sb.ToString());
             Log.Message($"[CETest] Results written to {path}");
         }
@@ -310,6 +591,106 @@ namespace CESSCompatTestStaging
             return new Check { name = name, eval = eval, informational = informational };
         }
 
+        /// <summary>A must-not-happen check. Held across the whole phase, not just sampled once.</summary>
+        private static Check N(string name, Func<(bool, string)> eval)
+        {
+            return new Check { name = name, eval = eval, negative = true };
+        }
+
+        /// <summary>
+        /// Something that must be true for the phase to mean anything. If it never holds the
+        /// phase reports INVALID — it did not test what it claims to, which is a different
+        /// failure from the code being wrong and should not be reported as either.
+        /// </summary>
+        private static Check P(string name, Func<(bool, string)> eval)
+        {
+            return new Check { name = name, eval = eval, precondition = true };
+        }
+
+        /// <summary>
+        /// The standing state dump every phase carries. Informational, re-evaluated on every
+        /// poll while positive checks latch — so this reports live state where the checks
+        /// beside it report history, and a disagreement between the two is how a check that
+        /// latched on the wrong world gets caught.
+        /// </summary>
+        private static Check State(string nick)
+        {
+            return new Check
+            {
+                name = "state",
+                informational = true,
+                eval = () =>
+                {
+                    Pawn pawn = Colonist(nick);
+                    CompSidearmMemory m = CompSidearmMemory.GetMemoryCompForPawn(pawn, fillExistingIfCreating: false);
+                    string mem = m == null ? "-" : string.Join(",", m.RememberedWeapons.Select(pr => pr.thing?.defName));
+                    string carried = string.Join(",", pawn.GetCarriedWeapons(includeEquipped: true, includeTools: true)
+                        .Select(w => w.def.defName));
+                    CompInventory inv = pawn.TryGetComp<CompInventory>();
+                    return (true,
+                        $"mem=[{mem}] carried=[{carried}] "
+                        + $"ranged={m?.DefaultRangedWeapon?.thing?.defName ?? "-"} "
+                        + $"melee={m?.PreferredMeleeWeapon?.thing?.defName ?? "-"} "
+                        + $"forced={m?.ForcedWeapon?.thing?.defName ?? "-"} "
+                        + $"primary={pawn.equipment?.Primary?.def?.defName ?? "-"} "
+                        + $"bulk={inv?.currentBulk:F1}/{inv?.capacityBulk:F1} "
+                        + $"job={pawn.CurJobDef?.defName ?? "-"}");
+                },
+            };
+        }
+
+        /// <summary>The colonist whose state each scenario's dump follows.</summary>
+        private static string ScenarioPawn(string name)
+        {
+            switch (name)
+            {
+                case "cetest1": return "Bulky";
+                case "cetest2": return "Picky";
+                case "cetest3": return "Scopey";
+                case "cetest4": return "Boomy";
+                default: return "Bulky";
+            }
+        }
+
+        /// <summary>
+        /// Phase 0 of every scenario: the patch census. Reflection-derived from Harmony
+        /// rather than hardcoded per class, so a Prepare that quietly returned false, a
+        /// Bootstrap per-class failure, or a TargetMethods that resolved nothing shows up as
+        /// a wrong count before any behavioral phase runs against a half-patched game.
+        /// </summary>
+        private static Phase PatchInventoryPhase()
+        {
+            return new Phase
+            {
+                label = "patch-inventory",
+                deadlineTicks = 1200,
+                checks =
+                {
+                    C("all-compat-patches-applied", () =>
+                    {
+                        var mine = Harmony.GetAllPatchedMethods()
+                            .Where(m =>
+                            {
+                                var info = Harmony.GetPatchInfo(m);
+                                // Literal rather than Bootstrap.HarmonyId: the staging mod
+                                // deliberately has no reference to the product assembly, and
+                                // the census should key on the id as actually registered.
+                                return info != null && info.Owners.Contains("eebette.CESimpleSidearmsCompat");
+                            })
+                            .ToList();
+                        // 19 distinct methods today: P01 x2, P02 x3, P03 x2, P04 x1, P05 x2
+                        // (one shared with P09's dry-run on the same method), P06 x1, P07 x1,
+                        // P08 x2 (SelfConsume declarations), P09 x2, P10 x2, P11 x2.
+                        // ">=" so an upstream adding a third SelfConsume declaration (the
+                        // probe pins three candidates) cannot fail the census.
+                        return (mine.Count >= 19,
+                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 19): "
+                            + string.Join(", ", mine.Select(m => m.DeclaringType?.Name + "." + m.Name).OrderBy(n => n)));
+                    }),
+                }
+            };
+        }
+
         private static List<Pawn> Hostiles()
         {
             return Find.CurrentMap.mapPawns.AllPawnsSpawned
@@ -341,12 +722,21 @@ namespace CESSCompatTestStaging
 
             return new List<Phase>
             {
+                PatchInventoryPhase(),
                 new Phase
                 {
                     label = "pickup-legality-and-hold",
                     deadlineTicks = 3000,
+                    minTicks = 600, // the hold-record negative has to hold across a window
                     checks =
                     {
+                        P("pistol-carried-and-remembered", () =>
+                        {
+                            bool carried = Carried(bulky, pistol) != null;
+                            bool remembered = CompSidearmMemory.GetMemoryCompForPawn(bulky)
+                                .RememberedWeapons.Any(pr => pr.thing == pistol);
+                            return (carried && remembered, $"carried={carried} remembered={remembered}");
+                        }),
                         C("lmg-denied-by-bulk", () =>
                         {
                             bool ok = StatCalculator.CanPickupSidearmType(new ThingDefStuffDefPair(lmg, null), bulky, out string err);
@@ -374,11 +764,13 @@ namespace CESSCompatTestStaging
                             bool pistolTargeted = excess && dropThing?.def == pistol;
                             return (!pistolTargeted, $"excess={excess} dropThing={dropThing?.def?.defName ?? "none"}");
                         }),
-                        C("no-hold-records-written", () =>
+                        N("no-hold-records-written", () =>
                         {
                             // The exemption is answered in the GetExcess* postfixes and nothing
                             // is written back: CE's hold-tracker is shared with the player's own
                             // "hold this" command, and editing it clobbered their records.
+                            // Negative: a record appearing at ANY point in the window fails the
+                            // phase — the old latched form could pass before one was written.
                             int n = PistolHoldRecords();
                             return (n == 0, $"pistol hold records={n} (want 0 — exemption is read-only)");
                         }),
@@ -388,6 +780,7 @@ namespace CESSCompatTestStaging
                 {
                     label = "forget-releases-hold",
                     deadlineTicks = 4000,
+                    minTicks = 600,
                     mutate = () =>
                     {
                         CompSidearmMemory.GetMemoryCompForPawn(bulky)
@@ -395,7 +788,13 @@ namespace CESSCompatTestStaging
                     },
                     checks =
                     {
-                        C("still-no-hold-records", () =>
+                        P("pistol-remembered-before-forget", () =>
+                        {
+                            bool remembered = CompSidearmMemory.GetMemoryCompForPawn(bulky)
+                                .RememberedWeapons.Any(pr => pr.thing == pistol);
+                            return (remembered, $"remembered={remembered}");
+                        }),
+                        N("still-no-hold-records", () =>
                         {
                             int n = PistolHoldRecords();
                             return (n == 0, $"pistol hold records={n}");
@@ -423,6 +822,8 @@ namespace CESSCompatTestStaging
                     },
                     checks =
                     {
+                        P("pistol-carried", () =>
+                            (Carried(bulky, pistol) != null, $"carried={Carried(bulky, pistol) != null}")),
                         C("exemption-survives-repeat-remembers", () =>
                         {
                             // SS's memory list grows on repeated remembers (see below); the
@@ -461,19 +862,20 @@ namespace CESSCompatTestStaging
 
             return new List<Phase>
             {
+                PatchInventoryPhase(),
                 new Phase
                 {
                     label = "scoring-and-classification",
                     deadlineTicks = 4000,
                     checks =
                     {
-                        C("dry-revolver-has-no-ammo", () =>
+                        P("dry-revolver-has-no-ammo", () =>
                         {
                             var user = Carried(picky, revolverDef)?.TryGetComp<CompAmmoUser>();
                             return (user != null && !user.HasAmmoOrMagazine,
                                 $"mag {user?.CurMagCount}/{user?.MagSize} hasAmmoOrMag={user?.HasAmmoOrMagazine}");
                         }),
-                        C("loaded-guns-have-ammo", () =>
+                        P("loaded-guns-have-ammo", () =>
                         {
                             var rifle = Carried(picky, rifleDef)?.TryGetComp<CompAmmoUser>();
                             var pistolUser = Carried(picky, pistolDef)?.TryGetComp<CompAmmoUser>();
@@ -525,6 +927,7 @@ namespace CESSCompatTestStaging
                 {
                     label = "dry-primary-switches-to-loaded",
                     deadlineTicks = 6000,
+                    minTicks = 600, // the never-dry negative has to hold across a window
                     mutate = () =>
                     {
                         // Drain the rifle completely: empty mag AND remove its caliber from
@@ -541,15 +944,25 @@ namespace CESSCompatTestStaging
                     },
                     checks =
                     {
+                        P("rifle-and-loaded-pistol-carried", () =>
+                        {
+                            bool rifleCarried = Carried(picky, rifleDef) != null;
+                            var pistolUser = Carried(picky, pistolDef)?.TryGetComp<CompAmmoUser>();
+                            bool pistolLoaded = pistolUser?.HasAmmoOrMagazine == true;
+                            return (rifleCarried && pistolLoaded, $"rifle={rifleCarried} pistolLoaded={pistolLoaded}");
+                        }),
                         C("primary-is-loaded-pistol", () =>
                         {
                             ThingDef primary = picky.equipment?.Primary?.def;
                             return (primary == pistolDef, $"primary={primary?.defName ?? "none"}");
                         }),
-                        C("never-dry-revolver-or-fists", () =>
+                        N("never-dry-revolver-or-fists", () =>
                         {
+                            // Held across the window, not sampled once: the switch landing on
+                            // the pistol first and the revolver later would have passed the
+                            // old latched form.
                             ThingDef primary = picky.equipment?.Primary?.def;
-                            return (primary != null && primary != revolverDef, $"primary={primary?.defName ?? "FISTS"}");
+                            return (primary != revolverDef, $"primary={primary?.defName ?? "FISTS"}");
                         }),
                     }
                 },
@@ -576,12 +989,17 @@ namespace CESSCompatTestStaging
 
             return new List<Phase>
             {
+                PatchInventoryPhase(),
                 new Phase
                 {
                     label = "cqc-melee-draw",
                     deadlineTicks = 30000,
                     checks =
                     {
+                        P("hostiles-present", () =>
+                            (Hostiles().Count > 0, $"hostiles={Hostiles().Count}")),
+                        P("fency-carries-gladius", () =>
+                            (Carried(fency, gladius) != null, $"carried={Carried(fency, gladius) != null}")),
                         C("fency-draws-gladius", () =>
                         {
                             ThingDef primary = fency.equipment?.Primary?.def;
@@ -596,6 +1014,8 @@ namespace CESSCompatTestStaging
                     mutate = () =>
                     {
                         SSCore.Settings.RangedCombatAutoSwitch = true;
+                        // (kept as a hard stop behind the precondition — a throw here is a
+                        // broken arrange, not a product failure)
                         SSCore.Settings.RangedCombatAutoSwitchMaxWarmup = 5f;
                         Pawn target = Hostiles().FirstOrDefault();
                         if (target == null)
@@ -618,6 +1038,12 @@ namespace CESSCompatTestStaging
                     },
                     checks =
                     {
+                        P("hostile-available-and-shotgun-carried", () =>
+                        {
+                            bool hostile = Hostiles().Count > 0;
+                            bool sg = Carried(scopey, shotgun) != null;
+                            return (hostile && sg, $"hostiles={Hostiles().Count} shotgunCarried={sg}");
+                        }),
                         C("scopey-swaps-to-shotgun", () =>
                         {
                             ThingDef primary = scopey.equipment?.Primary?.def;
@@ -654,6 +1080,14 @@ namespace CESSCompatTestStaging
                     },
                     checks =
                     {
+                        P("spare-ammo-for-primary", () =>
+                        {
+                            ThingWithComps primary = scopey.equipment?.Primary;
+                            CompAmmoUser user = primary?.TryGetComp<CompAmmoUser>();
+                            bool spare = user != null && scopey.inventory.innerContainer.Any(t =>
+                                user.Props.ammoSet.ammoTypes.Any(l => (ThingDef)l.ammo == t.def));
+                            return (spare, $"primary={primary?.def?.defName ?? "none"} spareAmmo={spare}");
+                        }),
                         C("reload-survives-ss-switch-call", () =>
                         {
                             // Passes once the reload finished with the same weapon still equipped.
@@ -677,6 +1111,24 @@ namespace CESSCompatTestStaging
                     // SS's preferred weapon, not the first viable one in CE's own list order.
                     label = "queued-equip-uses-ss-preference",
                     deadlineTicks = 10000,
+                    // On a fresh save (isolated run) the sniper IS the primary, and a
+                    // preference equal to the current weapon is an answer this path cannot
+                    // act on — the phase would test CE's fallback, not the arbitration. Put
+                    // another weapon in hand first; mid-sequence this is a no-op.
+                    arrange = () =>
+                    {
+                        if (scopey.equipment?.Primary?.def == sniper)
+                        {
+                            ThingWithComps other = scopey.inventory.innerContainer
+                                .OfType<ThingWithComps>().FirstOrDefault(t => t.def == shotgun)
+                                ?? scopey.inventory.innerContainer.OfType<ThingWithComps>()
+                                    .FirstOrDefault(t => t.def.IsRangedWeapon);
+                            if (other != null)
+                            {
+                                scopey.TryGetComp<CompInventory>().TrySwitchToWeapon(other);
+                            }
+                        }
+                    },
                     mutate = () =>
                     {
                         scopey.jobs.StopAll();
@@ -705,6 +1157,13 @@ namespace CESSCompatTestStaging
                     },
                     checks =
                     {
+                        P("sniper-carried-not-primary", () =>
+                        {
+                            bool carried = Carried(scopey, sniper) != null;
+                            bool notPrimary = scopey.equipment?.Primary?.def != sniper;
+                            return (carried && notPrimary,
+                                $"sniperCarried={carried} primary={scopey.equipment?.Primary?.def?.defName ?? "none"}");
+                        }),
                         C("equip-was-queued-not-instant", () =>
                         {
                             bool queued = queuedJob == CE_JobDefOf.EquipFromInventory;
@@ -727,10 +1186,50 @@ namespace CESSCompatTestStaging
 
         // -- CETEST-4: axes 4 (NPC sidearm ammo) + 8 (one-use fallback) -----
 
+        // Where Boomy stood before being parked out of the raiders' reach; default when
+        // the parking phase never ran (isolated run of the one-use phase).
+        private IntVec3 boomyHome = IntVec3.Invalid;
+
         private List<Phase> BuildCetest4()
         {
             Pawn boomy = Colonist("Boomy");
             ThingDef pistol = D("Gun_Autopistol");
+
+            // The raider phases and the one-use phase share a map but must not share
+            // actors: P04 loads the raiders' guns, and a loaded raider volley killed
+            // Boomy twice while the earlier phases ran (dead=True forensics; isolated
+            // runs — where the raiders die within a tick — never reproduced it).
+            void ParkBoomy()
+            {
+                boomyHome = boomy.Position;
+                IntVec3 corner = new IntVec3(5, 0, boomy.Map.Size.z - 6);
+                if (!corner.Standable(boomy.Map))
+                {
+                    CellFinder.TryFindRandomCellNear(corner, boomy.Map, 8, c => c.Standable(boomy.Map), out corner);
+                }
+                boomy.Position = corner;
+                boomy.Notify_Teleported();
+                boomy.drafter.Drafted = true; // stand still; do not wander back into the fight
+            }
+            void UnparkBoomy()
+            {
+                foreach (Pawn hostile in Hostiles())
+                {
+                    hostile.Destroy(DestroyMode.Vanish);
+                }
+                if (boomyHome.IsValid)
+                {
+                    IntVec3 back = boomyHome;
+                    if (!back.Standable(boomy.Map))
+                    {
+                        CellFinder.TryFindRandomCellNear(back, boomy.Map, 8, c => c.Standable(boomy.Map), out back);
+                    }
+                    boomy.Position = back;
+                    boomy.Notify_Teleported();
+                }
+                boomy.drafter.Drafted = false;
+                boomy.jobs.StopAll();
+            }
 
             (bool ok, string detail) RaiderProvisioning()
             {
@@ -798,11 +1297,21 @@ namespace CESSCompatTestStaging
 
             return new List<Phase>
             {
+                PatchInventoryPhase(),
                 new Phase
                 {
                     label = "raider-ammo-provisioning",
                     deadlineTicks = 4000,
-                    checks = { C("raiders-provisioned-no-orphans-no-overcap", () => RaiderProvisioning()) }
+                    arrange = ParkBoomy,
+                    checks =
+                    {
+                        P("raiders-present", () =>
+                        {
+                            int n = Hostiles().Count(h => !(h.RaceProps?.IsMechanoid ?? false));
+                            return (n > 0, $"human raiders={n}");
+                        }),
+                        C("raiders-provisioned-no-orphans-no-overcap", () => RaiderProvisioning()),
+                    }
                 },
                 new Phase
                 {
@@ -816,39 +1325,53 @@ namespace CESSCompatTestStaging
                             TestStagingComponent.ForceRangedSidearm(raider);
                         }
                     },
-                    checks = { C("still-clean-after-regeneration", () => RaiderProvisioning()) }
+                    checks =
+                    {
+                        P("raider-present", () =>
+                        {
+                            int n = Hostiles().Count(h => !(h.RaceProps?.IsMechanoid ?? false));
+                            return (n > 0, $"human raiders={n}");
+                        }),
+                        C("still-clean-after-regeneration", () => RaiderProvisioning()),
+                    }
                 },
                 new Phase
                 {
                     label = "one-use-fallback",
                     deadlineTicks = 25000,
+                    // No live hostiles at all — a raider (even disarmed) charges into melee
+                    // and kills the attack job; a still-armed one kills Boomy. Done in
+                    // arrange so the world is clean before the preconditions gate the act.
+                    arrange = UnparkBoomy,
                     mutate = () =>
                     {
-                        // No live hostiles at all — a raider (even disarmed) charges into
-                        // melee and kills the attack job. The rocket can target locations,
-                        // so fire it at open ground.
-                        foreach (Pawn hostile in Hostiles())
-                        {
-                            hostile.Destroy(DestroyMode.Vanish);
-                        }
-                        // Drafting makes SS swap to the pistol (launchers are manual-use, SS
-                        // skips them) — switch back via CE's own inventory API and suppress
-                        // the warmup auto-switch so the ROCKET is what actually fires.
                         boomy.drafter.Drafted = true;
                         SSCore.Settings.RangedCombatAutoSwitch = false;
-                        ThingWithComps launcher =
-                            boomy.equipment.Primary != null && boomy.equipment.Primary.def.defName.Contains("Rocket")
-                                ? boomy.equipment.Primary
-                                : boomy.inventory.innerContainer.OfType<ThingWithComps>()
-                                    .FirstOrDefault(t => t.def.defName.Contains("Rocket"));
-                        if (launcher == null)
+                        // The staged TripleRocket exercised the same Verb_ShootCEOneUse
+                        // consumption path but its FRAGMENTS reach far beyond the blast
+                        // radius — it downed or killed the shooter at any in-range firing
+                        // distance often enough to make the phase a coin flip. A smoke
+                        // grenade is the same one-use verb with a harmless payload, so the
+                        // phase tests the re-equip fallback instead of Boomy's luck. The
+                        // rocket is removed so SS cannot pick it as the re-equip instead
+                        // of the pistol.
+                        foreach (ThingWithComps rocket in boomy.inventory.innerContainer
+                            .OfType<ThingWithComps>().Where(t => t.def.defName.Contains("Rocket")).ToList())
                         {
-                            throw new InvalidOperationException("Launcher vanished before the one-use phase");
+                            rocket.Destroy(DestroyMode.Vanish);
                         }
-                        if (boomy.equipment.Primary != launcher)
+                        if (boomy.equipment.Primary?.def.defName.Contains("Rocket") ?? false)
                         {
-                            boomy.TryGetComp<CompInventory>().TrySwitchToWeapon(launcher);
+                            boomy.equipment.Primary.Destroy(DestroyMode.Vanish);
                         }
+                        // Destroying the primary makes CE re-arm Boomy synchronously
+                        // (SwitchToNextViableWeapon on destroy — through P09 and SS), so by
+                        // here the pistol is usually already in hand. Route the grenade
+                        // through CE's own switch API instead of AddEquipment, which errors
+                        // on an occupied primary slot.
+                        var launcher = (ThingWithComps)ThingMaker.MakeThing(D("CE_Weapon_GrenadeSmoke"));
+                        boomy.inventory.innerContainer.TryAdd(launcher, canMergeWithExistingStacks: false);
+                        boomy.TryGetComp<CompInventory>().TrySwitchToWeapon(launcher);
                         // As far as this launcher can actually shoot, so the blast cannot reach
                         // the shooter, but inside its range so a drafted AttackStatic fires
                         // instead of standing there unable to reach the cell. At a fixed 10
@@ -857,36 +1380,50 @@ namespace CESSCompatTestStaging
                         // other than the one-use fallback.
                         float launcherRange = launcher.GetComp<CompEquippable>()?.PrimaryVerb?.verbProps?.range ?? 12f;
                         int shotDistance = Math.Max(6, Math.Min(18, (int)launcherRange - 2));
+                        // Clear line of sight is part of the distance contract: a rocket
+                        // intercepted by a tree two cells out detonates next to the shooter,
+                        // and a dead Boomy fails the phase on something other than the
+                        // one-use fallback (observed once — dead=True, launcher consumed,
+                        // nobody left to re-equip).
+                        bool ShotCellOk(IntVec3 c) =>
+                            c.Standable(boomy.Map)
+                            && c.DistanceTo(boomy.Position) > shotDistance - 2f
+                            && GenSight.LineOfSight(boomy.Position, c, boomy.Map, skipFirstCell: true);
                         IntVec3 targetCell = boomy.Position + new IntVec3(shotDistance, 0, 0);
                         targetCell = targetCell.ClampInsideMap(boomy.Map);
-                        if (!targetCell.Standable(boomy.Map) || targetCell.DistanceTo(boomy.Position) < shotDistance - 2f)
+                        if (!ShotCellOk(targetCell))
                         {
                             CellFinder.TryFindRandomCellNear(boomy.Position, boomy.Map, shotDistance + 4,
-                                c => c.Standable(boomy.Map) && c.DistanceTo(boomy.Position) > shotDistance - 2f, out targetCell);
+                                ShotCellOk, out targetCell);
                         }
                         Job job = JobMaker.MakeJob(JobDefOf.AttackStatic, new LocalTargetInfo(targetCell));
                         boomy.jobs.TryTakeOrderedJob(job);
                     },
                     checks =
                     {
-                        C("launcher-consumed-pistol-equipped", () =>
+                        P("boomy-carries-pistol", () =>
                         {
-                            bool launcherAnywhere =
-                                (boomy.equipment?.Primary?.def.defName.Contains("Rocket") ?? false)
-                                || boomy.inventory.innerContainer.Any(t => t.def.defName.Contains("Rocket"));
+                            bool pistolCarried = Carried(boomy, pistol) != null;
+                            return (pistolCarried, $"pistol={pistolCarried}");
+                        }),
+                        C("one-use-consumed-pistol-equipped", () =>
+                        {
+                            bool grenadeAnywhere =
+                                boomy.equipment?.Primary?.def == D("CE_Weapon_GrenadeSmoke")
+                                || boomy.inventory.innerContainer.Any(t => t.def == D("CE_Weapon_GrenadeSmoke"));
                             ThingDef primary = boomy.equipment?.Primary?.def;
-                            return (!launcherAnywhere && primary == pistol,
-                                $"launcherPresent={launcherAnywhere} primary={primary?.defName ?? "FISTS"}");
+                            return (!grenadeAnywhere && primary == pistol,
+                                $"grenadePresent={grenadeAnywhere} primary={primary?.defName ?? "FISTS"}");
                         }),
                         C("boomy-health-forensics", () =>
                         {
                             bool pistolCarried = boomy.inventory.innerContainer.Any(t => t.def == pistol);
                             return (true, $"downed={boomy.Downed} dead={boomy.Dead} drafted={boomy.Drafted} pistolInInventory={pistolCarried} job={boomy.CurJobDef?.defName}");
                         }, informational: true),
-                        C("launcher-not-in-inventory", () =>
+                        C("one-use-not-in-inventory", () =>
                         {
-                            bool present = boomy.inventory.innerContainer.Any(t => t.def.defName.Contains("Rocket"));
-                            return (!present, $"launcher in inventory={present}");
+                            bool present = boomy.inventory.innerContainer.Any(t => t.def == D("CE_Weapon_GrenadeSmoke"));
+                            return (!present, $"grenade in inventory={present}");
                         }, informational: true),
                     }
                 },

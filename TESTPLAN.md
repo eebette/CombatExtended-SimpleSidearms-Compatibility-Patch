@@ -39,13 +39,72 @@ Most of this plan runs unattended via `test/run-assert.sh <scenario> <save>`
 ./test/run-assert.sh cetest2 CETEST-2-selection
 ./test/run-assert.sh cetest3 CETEST-3-combat
 ./test/run-assert.sh cetest4 CETEST-4-generation
+./test/verdict.py test/SaveData/test-results-<scenario>.json   # judge + pretty-print
 ```
 
-Full green pass recorded 2026-08-20 (all four scenarios, zero exceptions in logs).
+Runner discipline (2026-08-28 machinery, ported from the Loadouts module's suite):
+
+- **Checks never latch wrongly.** Positive checks latch on first pass; *negative*
+  checks (`N(...)`, must-not-happen) re-evaluate on every 30-tick poll and fail the
+  phase the moment they trip; *informational* checks re-evaluate and never gate.
+- **Preconditions or it didn't happen.** `P(...)` checks assert the world a phase
+  needs (weapon carried, raiders present, magazine loaded). The phase's act
+  (`mutate`) is deferred until they hold; if they never hold the phase reports
+  **INVALID** (a broken test), not FAIL (broken code) — and `verdict.py` treats
+  INVALID as red.
+- **Unexpected diagnostics fail the phase.** Any Error or Warning not on the
+  justified allowlist — from this mod, CE, or SS — fails the phase it appeared in.
+- **Every phase carries a `state` dump** (memory, carried, preferences, primary,
+  bulk, job) for forensics; a scenario-specific colonist is followed by default.
+- **Phase 0 of every scenario is the patch census**: reflection over Harmony for
+  methods patched by `eebette.CESimpleSidearmsCompat` (>= 19 today). A Prepare
+  that quietly skipped, a Bootstrap per-class failure, or a TargetMethods that
+  resolved nothing shows up before any behavioral phase runs half-patched.
+- **Isolated sweep**: `./test/run-isolated.sh <scenario> <save>` runs every phase
+  in its own process against a freshly loaded save (results merged by
+  `verdict.py --merge`). The sequenced run proves phases work against accumulated
+  state; this proves each stands alone.
+- **A/B regression proof**: `./test/verify-regression.sh [--ref REV] <scenario>
+  <phase-label> <files...>` stashes/reverts a fix, proves the named phase FAILS
+  without it (not VOID, not unevaluated), restores it, proves the whole scenario
+  passes. A check that has never been seen to fail is an assertion, not a test —
+  new failing-capable checks get one of these before they are trusted.
+- The Loadouts module's derivations are switched off in-memory for CETEST runs
+  (`DisableLoadoutsModule`, keyed to its current `CESimpleSidearmsCompat.Loadouts`
+  identity). If the module is active but the reflection misses, the runner
+  fails LOUD instead of silently testing a contaminated world.
+
+Full green pass recorded 2026-08-20 (all four scenarios, zero exceptions in logs)
+on the old latching machinery; re-verified green 2026-08-28 on the current
+machinery (sequenced + isolated, see the suite-can-fail proofs below).
+
+Suite-can-fail proofs (2026-08-28, scratch A/B — a patch class disabled via its
+Prepare, run, restored):
+
+- **P10 disabled** → cetest1: census FAIL naming exactly the two missing methods,
+  `forget-releases-hold` FAIL (CE dropped the unprotected pistol mid-run), and
+  `re-remember-idempotent` VOID on its `pistol-carried` precondition. Three
+  independent detections of one dead class.
+- **P03 disabled** → cetest2: census FAIL, and both behavioral phases VOID — see
+  the staging note below for why VOID and not FAIL.
+
+Known staging weakness (queue): the CETEST colonists have no CE loadout rows (or
+hold records) covering their staged kit, so any run that lingers past a phase
+deadline gives CE's own loadout enforcement time to strip whatever Simple
+Sidearms does not remember (observed: Picky stripped to bulk 0.0 during the P03
+scratch's long red windows; the rifle is not remembered, so P10 rightly does not
+protect it). Green runs never linger, so this only distorts *already-red* runs —
+but it turns a clean FAIL into a VOID cascade. Fix when next staging: give each
+CETEST colonist a CE loadout covering their kit.
 Coverage highlights beyond the manual checklist: axis-5 direct unit hit (SS switch
 entry point invoked DURING a live CE reload job — reload survived), axis-8 full
-chain (rocket actually fired at a ground cell, consumption → SS-preference
-re-equip), axis-10 hold-record lifecycle + dedup, axis-4 per-raider capacity audit
+chain (a one-use weapon actually fired at a ground cell, consumption →
+SS-preference re-equip; since 2026-08-28 the projectile is a CE smoke grenade —
+same Verb_ShootCEOneUse class as the staged rocket, but the rocket's FRAGMENTS
+reached far beyond its blast radius and downed or killed the shooter often
+enough to make the phase a coin flip; the phase also parks Boomy away from the
+P04-armed raiders while the earlier phases run, which was the other way he died),
+axis-10 hold-record lifecycle + dedup, axis-4 per-raider capacity audit
 + orphan-ammo scan + generator idempotence. The Loadouts module's derivations are
 disabled in-memory for these runs, so they exercise the compat patch alone.
 
