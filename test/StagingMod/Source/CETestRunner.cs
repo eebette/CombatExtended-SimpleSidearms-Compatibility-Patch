@@ -690,14 +690,15 @@ namespace CESSCompatTestStaging
                                 return info != null && info.Owners.Contains("eebette.CESimpleSidearmsCompat");
                             })
                             .ToList();
-                        // 20 distinct methods today: P01 x3 (capacity gate, retrieval
+                        // 21 distinct methods today: P01 x3 (capacity gate, retrieval
                         // postfix+scope on one method, hasWeaponType), P02 x3, P03 x2,
                         // P04 x1, P05 x2 (one shared with P09's dry-run), P06 x1, P07 x1
                         // (SS's own warmup postfix, transpiled), P08 x2 (SelfConsume
-                        // declarations), P09 x2, P10 x2, P11 x2. ">=" so an upstream adding
-                        // a third SelfConsume declaration cannot fail the census.
-                        return (mine.Count >= 20,
-                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 20): "
+                        // declarations), P09 x2, P10 x2, P11 x2, P12 x1 (MeleePenetration).
+                        // ">=" so an upstream adding a third SelfConsume declaration cannot
+                        // fail the census.
+                        return (mine.Count >= 21,
+                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 21): "
                             + string.Join(", ", mine.Select(m => m.DeclaringType?.Name + "." + m.Name).OrderBy(n => n)));
                     }),
                 }
@@ -1042,6 +1043,9 @@ namespace CESSCompatTestStaging
             thing.SetForbidden(false, warnOnFail: false);
         }
 
+        private ThingWithComps meleeMace;
+        private ThingWithComps meleeGladius;
+
         // Captured synchronously inside the retrieval-skip phase.
         private Verse.AI.Job retrievalFirstPass;
         private Verse.AI.Job retrievalSecondPass;
@@ -1173,6 +1177,38 @@ namespace CESSCompatTestStaging
                             bool emp = GettersFilters.isEMPWeapon(rifle);
                             bool danger = GettersFilters.isDangerousWeapon(rifle);
                             return (!emp && !danger, $"isEMP={emp} isDangerous={danger}");
+                        }),
+                    }
+                },
+                new Phase
+                {
+                    // Axis 12: SS's melee penetration term is dead under CE (vanilla stub =
+                    // damage x 0.015, near-uniform); the patch feeds it CE's real per-tool
+                    // penetration. A mace's head (5.625 MPa blunt) must outrank a gladius
+                    // (~0.45 mmRHA sharp) by a wide margin — under the dead stub both sit
+                    // within a whisker of each other, damage-proportional.
+                    label = "ce-melee-penetration-signal",
+                    deadlineTicks = 4000,
+                    checks =
+                    {
+                        P("world-ticking-and-weapons-made", () =>
+                        {
+                            if (meleeMace == null)
+                            {
+                                meleeMace = (ThingWithComps)ThingMaker.MakeThing(D("MeleeWeapon_Mace"), D("Steel"));
+                                meleeGladius = (ThingWithComps)ThingMaker.MakeThing(D("MeleeWeapon_Gladius"), D("Steel"));
+                            }
+                            return (Find.TickManager.TicksGame > 60 && meleeMace != null && meleeGladius != null,
+                                $"tick={Find.TickManager.TicksGame}");
+                        }),
+                        C("mace-penetration-dwarfs-gladius", () =>
+                        {
+                            float mace = StatCalculator.MeleePenetration(meleeMace, picky);
+                            float gladius = StatCalculator.MeleePenetration(meleeGladius, picky);
+                            // Same stuff on both, so the material factor cancels; the dead
+                            // vanilla stub gives a damage-proportional ~1:1 ratio.
+                            return (mace > gladius * 1.8f && mace > 0.3f,
+                                $"mace={mace:F3} gladius={gladius:F3} ratio={(gladius > 0 ? mace / gladius : -1):F2}");
                         }),
                     }
                 },
@@ -1539,8 +1575,196 @@ namespace CESSCompatTestStaging
                         reloadAfterBlockedSwitch = scopey.CurJobDef;
                     }
                 },
+                new Phase
+                {
+                    // Axis 9, rebuilt (adversarial round 3): CE's main dry-gun path
+                    // (DoOutOfAmmoAction) searches for a replacement DIRECTLY — the old
+                    // SwitchToNextViableWeapon-only seam never saw it, so CE equipped its
+                    // first cached gun and SS was never asked. The pick must be SS's.
+                    label = "a-dry-fire-arbitrates-to-ss-pick",
+                    deadlineTicks = 8000,
+                    checks =
+                    {
+                        P("world-is-ticking", () =>
+                            (Find.TickManager.TicksGame > 60, $"tick={Find.TickManager.TicksGame}")),
+                        C("dry-fire-forensics", () => (true, dryFireDebug ?? "-"), informational: true),
+                        C("replacement-job-targets-the-ss-pick", () =>
+                            (dryFireJob == CE_JobDefOf.EquipFromInventory && dryFireTarget == sniper,
+                             $"job={dryFireJob?.defName ?? "none"} target={dryFireTarget?.defName ?? "-"} (want EquipFromInventory:{sniper.defName})")),
+                    },
+                    mutate = () =>
+                    {
+                        scopey.drafter.Drafted = false;
+                        scopey.jobs.StopAll();
+                        // A loaded decoy FIRST in CE's cached list order, the SS-preferred
+                        // sniper after it: CE's own search takes list order, so the old
+                        // code deterministically picks the decoy.
+                        foreach (ThingWithComps gun in scopey.inventory.innerContainer
+                            .OfType<ThingWithComps>().Where(t => t.def.IsRangedWeapon).ToList())
+                        {
+                            gun.Destroy(DestroyMode.Vanish);
+                        }
+                        var decoy = (ThingWithComps)ThingMaker.MakeThing(D("Gun_Autopistol"));
+                        decoy.TryGetComp<CompAmmoUser>()?.ResetAmmoCount();
+                        scopey.inventory.innerContainer.TryAdd(decoy, canMergeWithExistingStacks: false);
+                        var sniperThing = (ThingWithComps)ThingMaker.MakeThing(sniper);
+                        sniperThing.TryGetComp<CompAmmoUser>()?.ResetAmmoCount();
+                        scopey.inventory.innerContainer.TryAdd(sniperThing, canMergeWithExistingStacks: false);
+                        scopey.TryGetComp<CompInventory>().UpdateInventory();
+                        CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(scopey);
+                        memory.InformOfAddedSidearm(decoy);
+                        memory.InformOfAddedSidearm(sniperThing);
+                        memory.DefaultRangedWeapon = new ThingDefStuffDefPair(sniper, null);
+
+                        // The gun that runs dry must NOT share a pair with the SS
+                        // preference: SS's DefaultRanged branch returns without equipping
+                        // when the pawn already wields the preferred pair (pair-level
+                        // identity cannot see that the wielded copy is the dry one), which
+                        // reads as no-opinion — that wielded-dry-copy gap is the parked
+                        // forced-dry family, not this phase's subject. Put a shotgun in
+                        // hand and dry that.
+                        ThingWithComps shotgunThing = scopey.inventory.innerContainer
+                            .OfType<ThingWithComps>().FirstOrDefault(t => t.def == shotgun);
+                        if (shotgunThing == null)
+                        {
+                            shotgunThing = (ThingWithComps)ThingMaker.MakeThing(shotgun);
+                            scopey.inventory.innerContainer.TryAdd(shotgunThing, canMergeWithExistingStacks: false);
+                            scopey.TryGetComp<CompInventory>().UpdateInventory();
+                        }
+                        shotgunThing.TryGetComp<CompAmmoUser>()?.ResetAmmoCount();
+                        if (scopey.equipment.Primary != shotgunThing)
+                        {
+                            scopey.TryGetComp<CompInventory>().TrySwitchToWeapon(shotgunThing);
+                        }
+                        // Dry the equipped gun completely and let CE's own out-of-ammo
+                        // action run — the real path a dry-firing gun takes.
+                        ThingWithComps primary = scopey.equipment.Primary;
+                        CompAmmoUser user = primary.TryGetComp<CompAmmoUser>();
+                        user.CurMagCount = 0;
+                        foreach (Thing stack in scopey.inventory.innerContainer
+                            .Where(t => user.Props.ammoSet.ammoTypes.Any(l => (ThingDef)l.ammo == t.def)).ToList())
+                        {
+                            stack.Destroy(DestroyMode.Vanish);
+                        }
+                        user.DoOutOfAmmoAction();
+                        dryFireJob = scopey.CurJobDef;
+                        dryFireTarget = (scopey.CurJob?.targetA.Thing)?.def;
+                        // Forensics: exercise the arbitration point directly and dump the
+                        // state the preference tree keys on.
+                        scopey.TryGetComp<CompInventory>().TryFindViableWeapon(out ThingWithComps directPick);
+                        dryFireDebug = $"directPick={directPick?.def?.defName ?? "null"} "
+                            + $"mode={memory.primaryWeaponMode} default={memory.DefaultRangedWeapon?.thing?.defName ?? "-"} "
+                            + $"forced={memory.ForcedWeapon?.thing?.defName ?? "-"} primary={scopey.equipment?.Primary?.def?.defName ?? "-"} "
+                            + $"sniperCarried={scopey.inventory.innerContainer.Any(t => t.def == sniper)} "
+                            + $"valid={scopey.IsValidSidearmsCarrierRightNow()}";
+                    }
+                },
+                new Phase
+                {
+                    // The disarm trap: the old re-entry read CE's fists branch (strip the
+                    // primary, equip nothing, return true) as success whenever SS's pick
+                    // was unusable. An unusable forced pick must hand the search back to
+                    // CE unrestricted — pawn keeps a weapon.
+                    label = "an-unusable-forced-pick-does-not-disarm",
+                    deadlineTicks = 8000,
+                    checks =
+                    {
+                        P("world-is-ticking", () =>
+                            (Find.TickManager.TicksGame > 60, $"tick={Find.TickManager.TicksGame}")),
+                        C("primary-survives-the-switch-call", () =>
+                            (forcedDisarmPrimaryPresent,
+                             $"primaryAtCall={forcedDisarmPrimaryPresent} job={forcedDisarmJob?.defName ?? "none"}")),
+                        C("a-loaded-gun-gets-queued-instead", () =>
+                            (forcedDisarmJob == CE_JobDefOf.EquipFromInventory,
+                             $"job={forcedDisarmJob?.defName ?? "none"}")),
+                    },
+                    mutate = () =>
+                    {
+                        scopey.drafter.Drafted = false;
+                        scopey.jobs.StopAll();
+                        // SS's forced pick: a completely dry sniper in the pack.
+                        ThingWithComps sniperThing = scopey.inventory.innerContainer
+                            .OfType<ThingWithComps>().FirstOrDefault(t => t.def == sniper);
+                        if (sniperThing == null)
+                        {
+                            sniperThing = (ThingWithComps)ThingMaker.MakeThing(sniper);
+                            scopey.inventory.innerContainer.TryAdd(sniperThing, canMergeWithExistingStacks: false);
+                            scopey.TryGetComp<CompInventory>().UpdateInventory();
+                        }
+                        CompAmmoUser sniperUser = sniperThing.TryGetComp<CompAmmoUser>();
+                        sniperUser.CurMagCount = 0;
+                        foreach (Thing stack in scopey.inventory.innerContainer
+                            .Where(t => sniperUser.Props.ammoSet.ammoTypes.Any(l => (ThingDef)l.ammo == t.def)).ToList())
+                        {
+                            stack.Destroy(DestroyMode.Vanish);
+                        }
+                        CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(scopey);
+                        memory.InformOfAddedSidearm(sniperThing);
+                        memory.ForcedWeapon = new ThingDefStuffDefPair(sniper, null);
+
+                        scopey.TryGetComp<CompInventory>()
+                            .SwitchToNextViableWeapon(useFists: true, useAOE: false, stopJob: false);
+                        forcedDisarmPrimaryPresent = scopey.equipment.Primary != null;
+                        forcedDisarmJob = scopey.CurJobDef;
+                        memory.ForcedWeapon = null;
+                    }
+                },
+                new Phase
+                {
+                    // SS's silence is two-shaped: an already-unarmed pawn whose memory says
+                    // "stay unarmed" never reaches an equip in the preference tree, and the
+                    // old job path read that as "no opinion" and let CE re-arm them.
+                    label = "stay-unarmed-is-respected-on-the-job-path",
+                    deadlineTicks = 8000,
+                    minTicks = 300, // the negative holds across a window
+                    checks =
+                    {
+                        P("world-is-ticking", () =>
+                            (Find.TickManager.TicksGame > 60, $"tick={Find.TickManager.TicksGame}")),
+                        C("no-equip-job-was-queued", () =>
+                            (unarmedPathJob != CE_JobDefOf.EquipFromInventory,
+                             $"jobAtCall={unarmedPathJob?.defName ?? "none"}")),
+                        N("the-pawn-stays-unarmed", () =>
+                            (scopey.equipment?.Primary == null,
+                             $"primary={scopey.equipment?.Primary?.def?.defName ?? "none"}")),
+                    },
+                    mutate = () =>
+                    {
+                        scopey.drafter.Drafted = false;
+                        scopey.jobs.StopAll();
+                        // Unarm by hand and set the player's fists preference; a loaded gun
+                        // stays in the pack as bait for the old re-arm path.
+                        ThingWithComps primary = scopey.equipment.Primary;
+                        if (primary != null)
+                        {
+                            scopey.equipment.TryTransferEquipmentToContainer(primary, scopey.inventory.innerContainer);
+                        }
+                        if (!scopey.inventory.innerContainer.OfType<ThingWithComps>()
+                                .Any(t => t.def.IsRangedWeapon && (t.TryGetComp<CompAmmoUser>()?.HasAndUsesAmmoOrMagazine ?? true)))
+                        {
+                            var bait = (ThingWithComps)ThingMaker.MakeThing(D("Gun_Autopistol"));
+                            bait.TryGetComp<CompAmmoUser>()?.ResetAmmoCount();
+                            scopey.inventory.innerContainer.TryAdd(bait, canMergeWithExistingStacks: false);
+                        }
+                        scopey.TryGetComp<CompInventory>().UpdateInventory();
+                        CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(scopey);
+                        memory.ForcedUnarmed = true;
+
+                        scopey.TryGetComp<CompInventory>()
+                            .SwitchToNextViableWeapon(useFists: true, useAOE: false, stopJob: false);
+                        unarmedPathJob = scopey.CurJobDef;
+                    }
+                },
             };
         }
+
+        // Captured synchronously inside the arbitration phases.
+        private JobDef dryFireJob;
+        private ThingDef dryFireTarget;
+        private string dryFireDebug;
+        private bool forcedDisarmPrimaryPresent;
+        private JobDef forcedDisarmJob;
+        private JobDef unarmedPathJob;
 
         // Captured synchronously inside the two reload-guard phases.
         private JobDef reloadAfterNoopSwitch;

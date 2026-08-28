@@ -124,6 +124,12 @@ landing the R2 fixes):
 - **SS memory is a multiset.** Three `InformOfAddedSidearm` calls mean three
   entries, and the count-aware exemption honours all three — normalize memory
   before asserting per-copy semantics.
+- **SS preferences are pair-level.** The DefaultRanged branch returns without
+  equipping when the pawn already WIELDS the preferred pair — it cannot see
+  that the wielded copy is the dry one and a loaded copy sits in the pack. A
+  phase testing dry-gun arbitration must dry a gun that does NOT share a pair
+  with the preference (the wielded-dry-copy gap itself is the parked forced-dry
+  family, Tactics scope).
 Coverage highlights beyond the manual checklist: axis-5 direct unit hit (SS switch
 entry point invoked DURING a live CE reload job — reload survived), axis-8 full
 chain (a one-use weapon actually fired at a ground cell, consumption →
