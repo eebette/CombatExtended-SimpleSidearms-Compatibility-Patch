@@ -70,6 +70,13 @@ namespace CESimpleSidearmsCompat.Patches
     /// <summary>
     /// The one seam the re-run needs: while it is in flight, the pawn's carried-weapon list
     /// does not include guns with no usable ammo.
+    ///
+    /// Interplay note: sibling modules hang their own postfixes on GetCarriedWeapons (the
+    /// Loadouts module hides excluded pairs during its picker brackets the same way). The
+    /// filters compose — each RemoveAll acts on whatever list it receives, each is scoped
+    /// by its own guard, and none re-adds — so their relative Harmony order does not
+    /// matter. Keep it that way: a postfix here must only ever REMOVE entries under a
+    /// scope of its own.
     /// </summary>
     [HarmonyPatch(typeof(Extensions), nameof(Extensions.GetCarriedWeapons),
                   new[] { typeof(Pawn), typeof(bool), typeof(bool) })]

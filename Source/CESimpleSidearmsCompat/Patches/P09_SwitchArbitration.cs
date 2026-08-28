@@ -159,6 +159,12 @@ namespace CESimpleSidearmsCompat.Patches
     }
 
     /// <summary>
+    /// CONTRACT (relied on beyond this file): AskSS observes without acting. While it is on
+    /// the stack, nothing is equipped, dropped, forgotten, or remembered — SS's preference
+    /// tree is halted at the exact decision point and its answer extracted. Any change that
+    /// lets a side effect escape the dry run breaks every caller that treats "ask SS" as a
+    /// pure question, and the suite's arbitration phases with it.
+    ///
     /// Every branch of SS's preference tree — forced weapon, forced-while-drafted, default
     /// ranged, preferred melee, unarmed, best-by-DPS — ends at this one method, and each
     /// returns as soon as it succeeds. Reporting success without equipping therefore stops
