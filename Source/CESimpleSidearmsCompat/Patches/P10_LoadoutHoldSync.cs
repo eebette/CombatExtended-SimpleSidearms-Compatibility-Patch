@@ -80,11 +80,21 @@ namespace CESimpleSidearmsCompat.Patches
             // instead of max(remembered, rows). Specific rows only — a generic row that
             // happens to cover a weapon def makes CE subtract more, i.e. errs toward
             // keeping a remembered weapon, never toward dropping one.
+            //
+            // Raw Slots, NEVER GetSlotsFor: for an adHoc loadout GetSlotsFor generates
+            // ammo slots by calling pawn.GetStorageByThingDef() — the method this postfix
+            // patches — and identical state at every level made that an unbounded mutual
+            // recursion: one "Ad Hoc" checkbox was an uncatchable stack overflow
+            // (convergence round). The only thing GetSlotsFor adds for WEAPON defs is the
+            // synthetic slot for the equipped primary, whose absence merely enlarges the
+            // shield by one for that def — the safe direction, and the equipped copy is
+            // not inventory-droppable anyway.
+            List<HoldRecord> holdRecords = LoadoutManager.GetHoldRecords(pawn);
             Dictionary<ThingDef, int> rowCounts = null;
             Loadout loadout = pawn.GetLoadout();
             if (loadout != null && !loadout.defaultLoadout)
             {
-                rowCounts = loadout.GetSlotsFor(pawn)
+                rowCounts = loadout.Slots
                     .Where(slot => slot.thingDef != null && slot.thingDef.IsWeapon)
                     .GroupBy(slot => slot.thingDef)
                     .ToDictionary(g => g.Key, g => g.Sum(slot => slot.count));
@@ -98,7 +108,11 @@ namespace CESimpleSidearmsCompat.Patches
                 }
                 int rows = 0;
                 rowCounts?.TryGetValue(def, out rows);
-                int shield = remembered - rows;
+                // Hold records protect after the shield is applied (CE compares its count
+                // against the shielded figure), so uncapped they would STACK with the
+                // memory instead of max-ing. Count them into the covered portion.
+                int held = holdRecords?.FirstOrDefault(r => r.thingDef == def)?.count ?? 0;
+                int shield = remembered - rows - held;
                 if (shield <= 0)
                 {
                     continue;

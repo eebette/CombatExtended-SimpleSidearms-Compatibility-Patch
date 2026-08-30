@@ -166,16 +166,19 @@ namespace CESimpleSidearmsCompat.Patches
         /// once-per-session message set stays spent — a pawn could silently never
         /// retrieve again with the one breadcrumb suppressed.
         /// </summary>
-        private static int gameStamp;
+        private static readonly System.WeakReference<Game> stampedGame = new System.WeakReference<Game>(null);
 
         private static void EnsureGame()
         {
-            int stamp = Current.Game?.GetHashCode() ?? 0;
-            if (stamp == gameStamp)
+            // Reference identity via WeakReference: a hash stamp can collide when a new
+            // Game lands on a freed address, silently skipping the reset; the weak ref
+            // gives true identity without pinning the previous game's object graph.
+            Game current = Current.Game;
+            if (stampedGame.TryGetTarget(out Game stamped) && ReferenceEquals(stamped, current))
             {
                 return;
             }
-            gameStamp = stamp;
+            stampedGame.SetTarget(current);
             refusals.Clear();
             messaged.Clear();
             RetrievingFor = null;

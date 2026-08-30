@@ -115,13 +115,25 @@ namespace CESimpleSidearmsCompat.Patches
                 return true;
             }
             // CE must actually be able to use the pick: the same public gates its own
-            // search applies. An unusable pick (a dry gun the player forced, a biocoded
-            // weapon) hands the search back to CE unrestricted — its fists fallback then
-            // only fires when NOTHING is usable, instead of stripping the pawn because
-            // SS's first choice was.
+            // search applies — CanEquip, ammo, and its two def-level category refusals
+            // (no AOE weapon unless asked for one, never an illumination device). An
+            // unusable pick (a dry gun the player forced, a biocoded weapon, a flare
+            // launcher set as the default) hands the search back to CE unrestricted — its
+            // fists fallback then only fires when NOTHING is usable, instead of stripping
+            // the pawn because SS's first choice was.
             CompAmmoUser ammoUser = pick.TryGetComp<CompAmmoUser>();
             if (!EquipmentUtility.CanEquip(pick, pawn)
-                || (ammoUser != null && !ammoUser.HasAndUsesAmmoOrMagazine))
+                || (ammoUser != null && !ammoUser.HasAndUsesAmmoOrMagazine)
+                || (!useAOE && pick.def.IsAOEWeapon())
+                || pick.def.IsIlluminationDevice())
+            {
+                return true;
+            }
+            // And the pick must live where CE's swap mechanics expect it: SS can nominate
+            // things outside the inventory container (a Tacticowl offhand), and CE's
+            // instant path silently no-ops on those AFTER reporting success and stopping
+            // the pawn's jobs.
+            if (!__instance.container.Contains(pick))
             {
                 return true;
             }
@@ -170,8 +182,9 @@ namespace CESimpleSidearmsCompat.Patches
         private static bool answered;
 
         public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
-            new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
-            "asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.");
+                new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
+                "asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.")
+            && SSEnums.Require("asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.");
 
         /// <summary>
         /// The weapon SS would equip right now. <paramref name="decided"/> separates SS's two

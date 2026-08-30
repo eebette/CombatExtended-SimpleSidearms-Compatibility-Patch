@@ -30,6 +30,9 @@ namespace CESimpleSidearmsCompat.Patches
         /// leave the others unpatched — and a miss is LOGGED, because an empty yield here
         /// used to skip that verb type without a word.
         /// </summary>
+        public static bool Prepare() => SSEnums.Require(
+            "pawns will stay empty-handed after throwing or consuming a one-use CE weapon.");
+
         [HarmonyTargetMethods]
         public static IEnumerable<MethodBase> TargetMethods()
         {
