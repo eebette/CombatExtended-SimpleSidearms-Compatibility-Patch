@@ -129,6 +129,22 @@ landing the R2 fixes):
   the END STATE — and assert def-level counts only: which INSTANCE survives
   mixed materials is CE's `FirstOrDefault`, the acknowledged seam in P10's
   header.
+Accepted-behavior ledger (reviewed, deliberately not fixed):
+
+- **ScoreCache serves stale values while paused** — freshness is keyed to
+  TicksGame, so gizmo DPS readouts lag an ammo/attachment change made while
+  paused until unpause. Cosmetic; combat decisions happen unpaused.
+- **The gizmo/float-menu pickup door checks abstract def Bulk** — SS's
+  type-level API offers no instance; a heavily-attachmented instance can slip
+  slightly over bulk and CE's soft encumbrance absorbs it. The retrieval door
+  uses instance stats and is exact.
+- **Silent-fragility watch list** (no fix without upstream movement): the P07
+  transpiler's two first-match IL anchors; census count-masking on
+  shared-target methods and compensating ±1 drift (behavioral phases are the
+  real net); positional-argument drift in same-typed upstream signatures;
+  a future upstream GetCarriedWeapons list-cache would make both mods'
+  RemoveAll postfixes corrupt shared state.
+
 - **RimWorld's crash-guard can wipe the test profile.** Killing the game
   mid-mod-load (display loss, hard kills) can trigger "mods failed, resetting
   to Core" — ModsConfig.xml rewritten to `ludeon.rimworld` only, after which
