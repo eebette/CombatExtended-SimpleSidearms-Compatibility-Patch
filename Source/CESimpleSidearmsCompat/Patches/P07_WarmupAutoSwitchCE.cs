@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Reflection.Emit;
 using CombatExtended;
 using HarmonyLib;
@@ -34,14 +35,23 @@ namespace CESimpleSidearmsCompat.Patches
                   new[] { typeof(Stance_Warmup) })]
     public static class Stance_Warmup_StanceTick_CE_Patch
     {
+        // The CE-side probe is part of THIS class's Prepare although the patch target is
+        // SS's method: the helpers below are called from IL injected into SS's postfix, so
+        // there is no outer/inner split to catch their JIT — a vanished CE type would
+        // otherwise throw inside the stance tick, per warming pawn, per tick, taking SS's
+        // vanilla feature down with a stack blaming SS (adversarial round 3).
         public static bool Prepare() => PatchGuard.Require(typeof(Stance_Warmup_StanceTick_Postfix), "StanceTick",
-            new[] { typeof(Stance_Warmup) },
-            "mid-warmup switches to a more accurate ranged weapon stay dead under CE.");
+                new[] { typeof(Stance_Warmup) },
+                "mid-warmup switches to a more accurate ranged weapon stay dead under CE.")
+            && PatchGuard.RequireType("CombatExtended.Verb_ShootCE",
+                "mid-warmup switches to a more accurate ranged weapon stay dead under CE.");
 
         /// <summary>
         /// Stack-neutral stand-in for the original `isinst Verb_Shoot`: pushes the verb for
         /// an eligible one and null otherwise, so the branch that follows behaves
-        /// identically.
+        /// identically. The CE reference lives in a guarded NoInlining inner so drift that
+        /// slips past the Prepare probe degrades this to the vanilla-only gate with one
+        /// named error instead of a per-tick exception flood inside the stance tick.
         /// </summary>
         public static Verb EligibleShootVerb(Verb verb)
         {
@@ -49,11 +59,22 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return verb;
             }
-            if (verb is Verb_ShootCE && verb.EquipmentSource != null)
+            try
             {
-                return verb;
+                return CEEligibleVerb(verb);
             }
-            return null;
+            catch (Exception e)
+            {
+                Log.ErrorOnce(PatchGuard.LogPrefix + "CE verb gate failed; warmup auto-switch runs "
+                              + "for vanilla verbs only. " + e, 0x43455315);
+                return null;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static Verb CEEligibleVerb(Verb verb)
+        {
+            return verb is Verb_ShootCE && verb.EquipmentSource != null ? verb : null;
         }
 
         /// <summary>

@@ -44,5 +44,61 @@ namespace CESimpleSidearmsCompat
                       + "The mod that declares it probably moved it.");
             return false;
         }
+
+        /// <summary>Prepare guard for a TYPE a patch body depends on beyond its target.</summary>
+        internal static bool RequireType(string fullName, string consequence)
+        {
+            if (AccessTools.TypeByName(fullName) != null)
+            {
+                return true;
+            }
+            Log.Error($"{LogPrefix}{fullName} not found — {consequence} "
+                      + "The mod that declares it probably moved it.");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// SS enum values, re-resolved BY NAME at load. The C# compiler bakes enum members to
+    /// integers from the reference assembly, so an upstream insertion mid-enum silently
+    /// rewires every baked comparison and every value passed into SS — zero log lines,
+    /// green census. Parsing the names against the loaded assembly's enum makes that drift
+    /// either harmless (values follow the names) or loud (a vanished name fails the
+    /// consuming classes' Prepare with its consequence).
+    /// </summary>
+    internal static class SSEnums
+    {
+        internal static readonly bool Resolved;
+        internal static readonly PeteTimesSix.SimpleSidearms.Utilities.Enums.DroppingModeEnum Combat;
+        internal static readonly PeteTimesSix.SimpleSidearms.Utilities.Enums.DroppingModeEnum UsedUp;
+        internal static readonly PeteTimesSix.SimpleSidearms.Utilities.Enums.PrimaryWeaponMode Melee;
+
+        static SSEnums()
+        {
+            Resolved = TryResolve("Combat", out Combat)
+                       & TryResolve("UsedUp", out UsedUp)
+                       & TryResolve("Melee", out Melee);
+        }
+
+        internal static bool Require(string consequence)
+        {
+            if (Resolved)
+            {
+                return true;
+            }
+            Log.Error(PatchGuard.LogPrefix + "A Simple Sidearms enum member could not be resolved "
+                      + $"by name — {consequence}");
+            return false;
+        }
+
+        private static bool TryResolve<T>(string name, out T value) where T : struct
+        {
+            if (Enum.TryParse(name, out value))
+            {
+                return true;
+            }
+            Log.Error($"{PatchGuard.LogPrefix}Simple Sidearms enum {typeof(T).Name}.{name} no longer exists.");
+            return false;
+        }
     }
 }

@@ -79,11 +79,18 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
+            // CE's own SelfConsume switch logic skips opportunistic attacks on purpose —
+            // that job's finish action stows and restores the pre-attack weapon itself,
+            // and equipping here just adds a swap-and-swap-back flicker mid-job.
+            if (pawn.jobs?.curJob?.def == CE_JobDefOf.OpportunisticAttack)
+            {
+                return;
+            }
             if (pawn.equipment.Primary != null || !pawn.IsValidSidearmsCarrierRightNow())
             {
                 return;
             }
-            WeaponAssingment.equipBestWeaponFromInventoryByPreference(pawn, DroppingModeEnum.UsedUp);
+            WeaponAssingment.equipBestWeaponFromInventoryByPreference(pawn, SSEnums.UsedUp);
         }
     }
 }

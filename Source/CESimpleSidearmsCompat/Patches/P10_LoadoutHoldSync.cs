@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using CombatExtended;
@@ -9,90 +10,105 @@ using Verse;
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 10: CE loadout enforcement (JobGiver_UpdateLoadout → GetExcessThing /
-    /// GetExcessEquipment) drops inventory items that aren't in the pawn's CE loadout or
-    /// hold records — which includes SS-remembered sidearms, causing drop/retrieve churn.
+    /// Axis 10: CE loadout enforcement (JobGiver_UpdateLoadout → GetExcessThing) drops
+    /// inventory items that aren't in the pawn's CE loadout or hold records — which
+    /// includes SS-remembered sidearms, causing drop/retrieve churn.
     ///
-    /// The exemption is answered where CE asks the question, and nothing is written back.
-    /// CE's hold-tracker is shared state: HoldRecord has no owner field and
-    /// Notify_HoldTrackerItem merges by ThingDef, so a record we created and one the
-    /// player created with CE's own "hold N of these" command are the same object.
-    /// Editing it from here corrupted player-set counts, fought CE's clear-forced-hold
-    /// button, and — because CE deletes picked-up records whose def has left the
-    /// inventory container — churned a create/delete cycle for equipped weapons.
+    /// The exemption is a SUBTRACTION IN CE'S OWN ARITHMETIC, not a veto on its verdict:
+    /// GetStorageByThingDef is the per-def stock count every excess decision starts from,
+    /// and the postfix below shields the remembered copies a loadout row does not already
+    /// cover. CE then computes zero excess for protected weapons all by itself — its scan
+    /// walks past them to the genuinely excess cargo behind them, its own dropCount comes
+    /// out pre-trimmed to the unprotected surplus, and nothing is written back to its
+    /// shared hold-tracker state. Adversarial round 3 killed the old verdict-level veto
+    /// three ways at once: it compared def-level CE arithmetic against pair-level SS
+    /// memory (two materials of one remembered def wedged the trim open forever), it let
+    /// whole stacks through untrimmed, and — because CE's scan returns its FIRST find —
+    /// vetoing that find made CE believe the pawn had no excess at all.
+    ///
+    /// Count semantics: protected = max(remembered, loadout rows), achieved by shielding
+    /// only remembered-beyond-rows (CE's own slot subtraction supplies the rest). SS
+    /// memory is a per-pair multiset; the shield sums it per def, because def is the
+    /// resolution CE enforces at. One acknowledged seam: which INSTANCE CE names for a
+    /// legitimate drop is its own choice, so with mixed materials of one def it may drop
+    /// the remembered-material copy and keep the other — def-level counts cannot steer
+    /// instance naming.
+    ///
+    /// GetStorageByThingDef's other two consumers stay coherent under the shield: the
+    /// pickup side tops a pawn back up to max(rows, remembered) — the same doctrine, and
+    /// what SS's own retrieval would do anyway — and the adHoc ammo path reads ammo defs,
+    /// which the weapons-only guard leaves untouched (a remembered thrown-grenade def is
+    /// both, and shielding it just stops remembered grenades counting as loose ammo
+    /// stock).
     /// </summary>
-    [HarmonyPatch(typeof(Utility_HoldTracker), nameof(Utility_HoldTracker.GetExcessThing),
-                  new[] { typeof(Pawn), typeof(Thing), typeof(int) },
-                  new[] { ArgumentType.Normal, ArgumentType.Out, ArgumentType.Out })]
-    public static class Utility_HoldTracker_GetExcessThing_Patch
+    [HarmonyPatch(typeof(Utility_HoldTracker), nameof(Utility_HoldTracker.GetStorageByThingDef),
+                  new[] { typeof(Pawn) })]
+    public static class Utility_HoldTracker_GetStorageByThingDef_Patch
     {
-        public static bool Prepare() => PatchGuard.Require(typeof(Utility_HoldTracker), "GetExcessThing",
-            new[] { typeof(Pawn), typeof(Thing).MakeByRefType(), typeof(int).MakeByRefType() },
+        public static bool Prepare() => PatchGuard.Require(typeof(Utility_HoldTracker), "GetStorageByThingDef",
+            new[] { typeof(Pawn) },
             "CE loadout enforcement will drop remembered sidearms from inventory (drop/retrieve churn).");
 
         [HarmonyPostfix]
-        public static void Postfix(Pawn pawn, ref Thing dropThing, ref int dropCount, ref bool __result)
+        public static void Postfix(Pawn pawn, Dictionary<ThingDef, Integer> __result)
         {
             try
             {
-                PostfixInner(pawn, ref dropThing, ref dropCount, ref __result);
+                PostfixInner(pawn, __result);
             }
             catch (Exception e)
             {
-                Log.ErrorOnce(PatchGuard.LogPrefix + "Remembered-sidearm drop exemption failed. " + e, 0x4345530E);
+                Log.ErrorOnce(PatchGuard.LogPrefix + "Remembered-sidearm shield failed; CE counts "
+                              + "remembered weapons as excess. " + e, 0x4345530E);
             }
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static void PostfixInner(Pawn pawn, ref Thing dropThing, ref int dropCount, ref bool __result)
+        private static void PostfixInner(Pawn pawn, Dictionary<ThingDef, Integer> __result)
         {
-            if (!__result || dropThing == null || !dropThing.def.IsWeapon)
+            if (pawn == null || __result == null || __result.Count == 0)
             {
                 return;
             }
-            if (!CompatUtil.SSRemembers(pawn, dropThing))
+            CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(pawn, fillExistingIfCreating: false);
+            if (memory?.RememberedWeapons == null || memory.RememberedWeapons.Count == 0)
             {
                 return;
             }
-            // Count-aware (issue #23): SS memory is per type, so an unconditional veto made
-            // every spare copy of a remembered pair undroppable — a Knife x1 loadout row
-            // plus two battlefield pickups meant three knives forever. The exemption
-            // protects as many instances as SS's memory (a multiset — one entry per copy)
-            // or the CE loadout row asks for, whichever is more, and lets CE trim the rest.
-            int wanted = ProtectedCount(pawn, dropThing);
-            if (CarriedCount(pawn, dropThing) <= wanted)
+            // Loadout rows already shield their count via CE's own slot subtraction;
+            // shielding the full remembered count on top would protect remembered + rows
+            // instead of max(remembered, rows). Specific rows only — a generic row that
+            // happens to cover a weapon def makes CE subtract more, i.e. errs toward
+            // keeping a remembered weapon, never toward dropping one.
+            Dictionary<ThingDef, int> rowCounts = null;
+            Loadout loadout = pawn.GetLoadout();
+            if (loadout != null && !loadout.defaultLoadout)
             {
-                __result = false;
-                dropThing = null;
-                dropCount = 0;
+                rowCounts = loadout.GetSlotsFor(pawn)
+                    .Where(slot => slot.thingDef != null && slot.thingDef.IsWeapon)
+                    .GroupBy(slot => slot.thingDef)
+                    .ToDictionary(g => g.Key, g => g.Sum(slot => slot.count));
             }
-        }
-
-        private static int ProtectedCount(Pawn pawn, Thing thing)
-        {
-            var pair = new ThingDefStuffDefPair(thing.def, thing.Stuff);
-            int remembered = CompSidearmMemory.GetMemoryCompForPawn(pawn, false)?
-                .RememberedWeapons?.Count(p => p == pair) ?? 0;
-            // CE loadout slots carry no stuff, so a def-wide row conservatively covers
-            // every stuff variant — the same def-level matching CE's own tracker uses.
-            int inLoadout = pawn.GetLoadout()?.Slots?
-                .Where(slot => slot.thingDef == thing.def)
-                .Sum(slot => slot.count) ?? 0;
-            return Math.Max(remembered, inLoadout);
-        }
-
-        private static int CarriedCount(Pawn pawn, Thing thing)
-        {
-            var pair = new ThingDefStuffDefPair(thing.def, thing.Stuff);
-            int count = pawn.inventory?.innerContainer?
-                .Where(t => t.def == pair.thing && t.Stuff == pair.stuff)
-                .Sum(t => t.stackCount) ?? 0;
-            ThingWithComps primary = pawn.equipment?.Primary;
-            if (primary != null && primary.def == pair.thing && primary.Stuff == pair.stuff)
+            foreach (ThingDef def in __result.Keys.Where(d => d.IsWeapon).ToList())
             {
-                count++;
+                int remembered = memory.RememberedWeapons.Count(pair => pair.thing == def);
+                if (remembered == 0)
+                {
+                    continue;
+                }
+                int rows = 0;
+                rowCounts?.TryGetValue(def, out rows);
+                int shield = remembered - rows;
+                if (shield <= 0)
+                {
+                    continue;
+                }
+                __result[def].value -= shield;
+                if (__result[def].value <= 0)
+                {
+                    __result.Remove(def);
+                }
             }
-            return count;
         }
     }
 
@@ -125,11 +141,11 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
-            // Deliberately NOT count-aware, unlike the inventory exemption above: whatever
-            // the counts, the equipped copy is the instance SS wants in the rotation, and
-            // the inventory side already trims the spares — protecting the one in hand is
-            // what makes the two converge on "carry exactly what was asked" instead of CE
-            // stripping the primary while duplicates sit in the backpack.
+            // Deliberately not count-aware, unlike the inventory-side shield above:
+            // whatever the counts, the equipped copy is the instance SS wants in the
+            // rotation, and the inventory side trims the spares — protecting the one in
+            // hand is what makes the two converge on "carry exactly what was asked"
+            // instead of CE stripping the primary while duplicates sit in the backpack.
             if (CompatUtil.SSRemembers(pawn, dropEquipment))
             {
                 __result = false;

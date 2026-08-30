@@ -159,8 +159,31 @@ namespace CESimpleSidearmsCompat.Patches
         /// <summary>Non-null while SS's retrieval job giver is running for this pawn.</summary>
         internal static Pawn RetrievingFor;
 
+        /// <summary>
+        /// These statics outlive the loaded game: without this, loading an earlier save
+        /// time-travels TicksGame backwards (a negative age makes the expiry backstop
+        /// unreachable), thingIDNumbers recur across saves and colonies, and the
+        /// once-per-session message set stays spent — a pawn could silently never
+        /// retrieve again with the one breadcrumb suppressed.
+        /// </summary>
+        private static int gameStamp;
+
+        private static void EnsureGame()
+        {
+            int stamp = Current.Game?.GetHashCode() ?? 0;
+            if (stamp == gameStamp)
+            {
+                return;
+            }
+            gameStamp = stamp;
+            refusals.Clear();
+            messaged.Clear();
+            RetrievingFor = null;
+        }
+
         internal static void Record(Pawn pawn, CompInventory inventory, Thing target)
         {
+            EnsureGame();
             var key = (pawn.thingIDNumber, new ThingDefStuffDefPair(target.def, target.Stuff));
             refusals[key] = new Refusal
             {
@@ -177,14 +200,18 @@ namespace CESimpleSidearmsCompat.Patches
 
         internal static bool StandsFor(Pawn pawn, ThingDefStuffDefPair pair)
         {
+            EnsureGame();
             var key = (pawn.thingIDNumber, pair);
             if (!refusals.TryGetValue(key, out Refusal refusal))
             {
                 return false;
             }
+            // Negative age counts as expired: it means the clock moved backwards under
+            // the entry (a same-session load the game stamp somehow missed).
+            int age = Find.TickManager.TicksGame - refusal.tick;
             CompInventory inventory = pawn.TryGetComp<CompInventory>();
             if (inventory == null
-                || Find.TickManager.TicksGame - refusal.tick > ExpiryTicks
+                || age < 0 || age > ExpiryTicks
                 || inventory.GetAvailableBulk(false) > refusal.freeBulk + 0.01f
                 || inventory.GetAvailableWeight(false) > refusal.freeWeight + 0.01f)
             {

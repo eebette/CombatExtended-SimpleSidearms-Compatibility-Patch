@@ -24,8 +24,9 @@ namespace CESimpleSidearmsCompat.Patches
     public static class WeaponAssingment_equipBestByPreference_Patch
     {
         public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipBestWeaponFromInventoryByPreference",
-            new[] { typeof(Pawn), typeof(DroppingModeEnum), typeof(PrimaryWeaponMode?), typeof(Pawn) },
-            "Simple Sidearms' automatic swaps can cancel a Combat Extended reload mid-way.");
+                new[] { typeof(Pawn), typeof(DroppingModeEnum), typeof(PrimaryWeaponMode?), typeof(Pawn) },
+                "Simple Sidearms' automatic swaps can cancel a Combat Extended reload mid-way.")
+            && SSEnums.Require("Simple Sidearms' automatic swaps can cancel a Combat Extended reload mid-way.");
 
         [HarmonyPrefix]
         public static bool Prefix(Pawn pawn, DroppingModeEnum dropMode, PrimaryWeaponMode? modeOverride)
@@ -52,7 +53,8 @@ namespace CESimpleSidearmsCompat.Patches
             // Melee override: doCQC (attacked in melee) and chooseOptimalMeleeForAttack
             // (ordered to melee). UsedUp: the weapon is already gone, so there is no
             // reload worth protecting. Everything else waits for the reload to finish.
-            return modeOverride == PrimaryWeaponMode.Melee || dropMode == DroppingModeEnum.UsedUp;
+            // (Name-resolved values — see SSEnums.)
+            return modeOverride == SSEnums.Melee || dropMode == SSEnums.UsedUp;
         }
     }
 
@@ -70,8 +72,10 @@ namespace CESimpleSidearmsCompat.Patches
                   new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) })]
     public static class WeaponAssingment_equipSpecificWeapon_Patch
     {
-        /// <summary>The pawn whose reload the prefix ended for the call in flight.</summary>
+        /// <summary>The pawn whose reload the prefix ended for the call in flight, and the
+        /// gun that reload was feeding.</summary>
         private static Pawn endedReloadFor;
+        private static ThingWithComps endedReloadGun;
 
         public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
             new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
@@ -97,14 +101,25 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
+            // The gun the job is actually feeding is its TargetB — CE issues ReloadWeapon
+            // jobs for INVENTORY guns too (gear-tab reload, JobGiver_CheckReload top-offs),
+            // and a backpack top-off does not conflict with equipping at all: the gun
+            // stays where the driver expects it. Only a reload of the equipped primary is
+            // orphaned by a swap.
+            var reloading = pawn.CurJob?.targetB.Thing as ThingWithComps;
+            if (reloading == null || reloading != pawn.equipment?.Primary)
+            {
+                return;
+            }
             // Equipping the already-equipped weapon is a no-op SS refuses immediately —
             // nothing is about to conflict with the reload, so keep it running.
-            if (weapon != null && weapon == pawn.equipment?.Primary)
+            if (weapon != null && weapon == reloading)
             {
                 return;
             }
             pawn.jobs.EndCurrentJob(JobCondition.InterruptForced, startNewJob: false, canReturnToPool: true);
             endedReloadFor = pawn;
+            endedReloadGun = reloading;
         }
 
         [HarmonyPostfix]
@@ -127,7 +142,9 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
+            ThingWithComps gun = endedReloadGun;
             endedReloadFor = null;
+            endedReloadGun = null;
             // The equip went through — the reload was ended for a reason and the new
             // weapon is not the one it was feeding.
             if (__result)
@@ -135,13 +152,27 @@ namespace CESimpleSidearmsCompat.Patches
                 return;
             }
             // SS refused after the prefix ran (blocked weapon, invalid carrier): the pawn
-            // still holds the half-reloaded gun and lost the job for nothing. Restart it
-            // rather than leaving the magazine empty until something else notices.
-            CompAmmoUser ammoUser = pawn?.equipment?.Primary?.TryGetComp<CompAmmoUser>();
+            // still holds the half-reloaded gun and lost the job for nothing. Restart the
+            // reload of THAT gun, not whatever is in hand now.
+            CompAmmoUser ammoUser = gun?.TryGetComp<CompAmmoUser>();
             Verse.AI.Job reload = ammoUser?.TryMakeReloadJob();
             if (reload != null && pawn.jobs != null && pawn.CurJob == null)
             {
                 pawn.jobs.StartJob(reload, JobCondition.InterruptForced);
+            }
+        }
+
+        // A finalizer, not just the postfix: postfixes do not run when the original (or a
+        // later prefix) throws, and a stranded flag both loses the repair and arms a
+        // spurious reload on an unrelated later call for the same pawn. Same reasoning as
+        // the retrieval scope bracket in P01.
+        [HarmonyFinalizer]
+        public static void Finalizer(Pawn pawn)
+        {
+            if (endedReloadFor == pawn)
+            {
+                endedReloadFor = null;
+                endedReloadGun = null;
             }
         }
     }

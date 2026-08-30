@@ -186,7 +186,7 @@ namespace CESimpleSidearmsCompat.Patches
             answered = false;
             try
             {
-                WeaponAssingment.equipBestWeaponFromInventoryByPreference(pawn, DroppingModeEnum.Combat);
+                WeaponAssingment.equipBestWeaponFromInventoryByPreference(pawn, SSEnums.Combat);
             }
             catch (Exception e)
             {

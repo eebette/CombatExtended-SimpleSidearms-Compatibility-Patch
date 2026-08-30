@@ -249,8 +249,12 @@ namespace CESimpleSidearmsCompat.Patches
                 float dist = Mathf.Max(1f, distance);
                 float shotSpeed = Mathf.Max(1f,
                     CompatUtil.CurrentProjectile(weapon, ammoUser)?.projectile?.speed ?? 0f);
+                // offset = the aim height on the target's [0, h] span. CE's own readout
+                // passes size.y / 2 (ShiftVecReport.cs:98 — center of the exposed span);
+                // 0 means "aim at the feet" and mathematically caps the vertical term at
+                // 0.5 however accurate the gun.
                 return Mathf.Clamp01(CE_Math.CalculateHitPercent(
-                    dist, ReferenceTargetWidth, ReferenceTargetHeight, offset: 0f,
+                    dist, ReferenceTargetWidth, ReferenceTargetHeight, offset: ReferenceTargetHeight / 2f,
                     shotSpeed: shotSpeed, shotAngle: 0f,
                     swayDegrees: stats.sway, spreadDegrees: stats.spread,
                     visibilityShift: 0f, gravity: CE_Utility.GravityConst));
