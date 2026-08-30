@@ -34,12 +34,15 @@ namespace CESimpleSidearmsCompat.Patches
     /// the remembered-material copy and keep the other — def-level counts cannot steer
     /// instance naming.
     ///
-    /// GetStorageByThingDef's other two consumers stay coherent under the shield: the
-    /// pickup side tops a pawn back up to max(rows, remembered) — the same doctrine, and
-    /// what SS's own retrieval would do anyway — and the adHoc ammo path reads ammo defs,
-    /// which the weapons-only guard leaves untouched (a remembered thrown-grenade def is
-    /// both, and shielding it just stops remembered grenades counting as loose ammo
-    /// stock).
+    /// GetStorageByThingDef's other two consumers stay coherent under the shield, with
+    /// their exact semantics (targeted re-pass): CE's pickup iterates loadout SLOTS, so
+    /// unslotted remembered defs get no CE pickup at all (SS's retrieval owns those), and
+    /// slotted defs top up to max(rows, remembered − held) — never past the drop
+    /// threshold, so no churn. The adHoc ammo path: a remembered weapon-and-ammo def
+    /// (thrown grenades) is hidden from the ammo census, so the pawn settles at
+    /// ammo-target + remembered of that def, and the other ammo types of the same set
+    /// get slightly larger budgets because the census total shrank — both stable, both
+    /// erring toward carrying more, never oscillating.
     /// </summary>
     [HarmonyPatch(typeof(Utility_HoldTracker), nameof(Utility_HoldTracker.GetStorageByThingDef),
                   new[] { typeof(Pawn) })]
@@ -79,7 +82,13 @@ namespace CESimpleSidearmsCompat.Patches
             // shielding the full remembered count on top would protect remembered + rows
             // instead of max(remembered, rows). Specific rows only — a generic row that
             // happens to cover a weapon def makes CE subtract more, i.e. errs toward
-            // keeping a remembered weapon, never toward dropping one.
+            // keeping a remembered weapon, never toward dropping one. Accepted seam on
+            // the PICKUP side of the same choice: a generic pickup row whose filter
+            // matches a remembered weapon def cannot see the shielded copies, so the pawn
+            // fetches to remembered + generic count — a sum, and a real fetch job.
+            // Correct-direction netting for generics is genuinely hard (a generic covers
+            // a class, and charging its count against every matching remembered def errs
+            // toward dropping); a specific row for the def nets exactly.
             //
             // Raw Slots, NEVER GetSlotsFor: for an adHoc loadout GetSlotsFor generates
             // ammo slots by calling pawn.GetStorageByThingDef() — the method this postfix
@@ -98,6 +107,20 @@ namespace CESimpleSidearmsCompat.Patches
                     .Where(slot => slot.thingDef != null && slot.thingDef.IsWeapon)
                     .GroupBy(slot => slot.thingDef)
                     .ToDictionary(g => g.Key, g => g.Sum(slot => slot.count));
+                // The one thing raw Slots loses vs GetSlotsFor: on an adHoc loadout CE
+                // synthesizes a row for the equipped primary. Without counting it here the
+                // shield ran one unit long and a looted same-def spare in the backpack
+                // was protected forever (targeted re-pass, F1). Same gate CE applies —
+                // adHoc, player pawn, something equipped, no specific row naming it.
+                if (loadout.adHoc && (pawn.Faction?.IsPlayer ?? false)
+                    && pawn.equipment?.Primary != null)
+                {
+                    ThingDef primaryDef = pawn.equipment.Primary.def;
+                    if (!rowCounts.ContainsKey(primaryDef))
+                    {
+                        rowCounts[primaryDef] = 1;
+                    }
+                }
             }
             foreach (ThingDef def in __result.Keys.Where(d => d.IsWeapon).ToList())
             {
