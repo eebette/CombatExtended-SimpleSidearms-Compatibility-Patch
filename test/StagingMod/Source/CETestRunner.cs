@@ -134,7 +134,11 @@ namespace CESSCompatTestStaging
             "[RimBridge] STARTUP_TIMING",
         };
 
-        private readonly HashSet<string> seenDiagnostics = new HashSet<string>();
+        // text -> repeats already accounted for. RimWorld merges identical log texts
+        // into one LogMessage with a growing repeats count, so set-of-text dedupe made
+        // the FIRST (expected) occurrence of a constant warning spend the text for the
+        // whole run — an identical warning provoked by a later phase was invisible.
+        private readonly Dictionary<string, int> seenDiagnostics = new Dictionary<string, int>();
 
         /// <summary>
         /// Everything already in the log when the scenario starts is somebody else's: mod
@@ -145,7 +149,7 @@ namespace CESSCompatTestStaging
         {
             foreach (LogMessage msg in Log.Messages)
             {
-                seenDiagnostics.Add(msg.text ?? "");
+                seenDiagnostics[msg.text ?? ""] = msg.repeats;
             }
             Log.Message($"[CETest] Diagnostics baselined at {seenDiagnostics.Count} pre-existing message(s).");
         }
@@ -192,10 +196,13 @@ namespace CESSCompatTestStaging
                     continue;
                 }
                 string text = msg.text ?? "";
-                if (!seenDiagnostics.Add(text))
+                // A grown repeats count is a NEW occurrence of a previously-seen text and
+                // must be re-judged against the CURRENT phase's expectations.
+                if (seenDiagnostics.TryGetValue(text, out int accounted) && msg.repeats <= accounted)
                 {
                     continue;
                 }
+                seenDiagnostics[text] = msg.repeats;
                 if (ExpectedDiagnostics.Any(e => text.Contains(e)))
                 {
                     continue;
@@ -1153,8 +1160,48 @@ namespace CESSCompatTestStaging
                             + $"knifeForbidden={knifeThing.IsForbidden(bulky)} reservable={bulky.CanReserve(knifeThing)}";
                     }
                 },
+                new Phase
+                {
+                    // Convergence-round Critical: CE's "Ad Hoc" loadouts generate their
+                    // ammo slots by calling GetStorageByThingDef from inside GetSlotsFor —
+                    // the method the drop shield patches. Enumerating GetSlotsFor in the
+                    // postfix made that an unbounded mutual recursion: one checkbox was an
+                    // uncatchable stack overflow. The phase's assertion is survival: with
+                    // the pre-fix code the process dies inside this mutate and no result
+                    // file is ever written.
+                    label = "an-adhoc-loadout-does-not-recurse-the-shield",
+                    deadlineTicks = 4000,
+                    checks =
+                    {
+                        P("world-is-ticking", () =>
+                            (Find.TickManager.TicksGame > 60, $"tick={Find.TickManager.TicksGame}")),
+                        C("the-excess-scan-returns", () =>
+                            (adHocProbeRan, $"probeRan={adHocProbeRan} excess={adHocExcessResult}")),
+                    },
+                    mutate = () =>
+                    {
+                        CombatExtended.Loadout loadout = Utility_Loadouts.GetLoadout(bulky);
+                        bool wasAdHoc = loadout.adHoc;
+                        int wasMags = loadout.adHocMags;
+                        try
+                        {
+                            loadout.adHoc = true;
+                            loadout.adHocMags = 2;
+                            adHocExcessResult = Utility_HoldTracker.GetExcessThing(bulky, out Thing _, out int _);
+                            adHocProbeRan = true;
+                        }
+                        finally
+                        {
+                            loadout.adHoc = wasAdHoc;
+                            loadout.adHocMags = wasMags;
+                        }
+                    }
+                },
             };
         }
+
+        private bool adHocProbeRan;
+        private bool adHocExcessResult;
 
         /// <summary>Instances of a def the pawn carries, equipped included.</summary>
         private static int CarriedOfDef(Pawn pawn, ThingDef def)
