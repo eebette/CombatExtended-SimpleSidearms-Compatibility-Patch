@@ -121,6 +121,21 @@ landing the R2 fixes):
   figures need `UpdateInventory()` after direct container inserts.
 - **Placed items can be forbidden.** SS's retrieval search skips forbidden
   things; unforbid the resolved instance right before acting on it.
+- **Drive CE's enforcement, don't poll it.** On a dropUndefined loadout CE
+  consumes unshielded items within ticks of their existence, and its excess scan
+  proposes ONE instance per call in unstable dict order (loose staged ammo can
+  precede the item under test on a fresh save). Phases judging the drop
+  exemption converge synchronously in mutate — consume every proposal, assert
+  the END STATE — and assert def-level counts only: which INSTANCE survives
+  mixed materials is CE's `FirstOrDefault`, the acknowledged seam in P10's
+  header.
+- **RimWorld's crash-guard can wipe the test profile.** Killing the game
+  mid-mod-load (display loss, hard kills) can trigger "mods failed, resetting
+  to Core" — ModsConfig.xml rewritten to `ludeon.rimworld` only, after which
+  every launch is a vanilla game idling at the main menu with no runner and no
+  timeout-friendly exit. If runs suddenly produce no result files, check the
+  modlist FIRST. (Restored 2026-08-30 from the load-order in the 08-28 logs;
+  the profile also needs Steam running, or the Steam-build blocks on a modal.)
 - **SS memory is a multiset.** Three `InformOfAddedSidearm` calls mean three
   entries, and the count-aware exemption honours all three — normalize memory
   before asserting per-copy semantics.

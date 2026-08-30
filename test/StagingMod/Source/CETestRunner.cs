@@ -97,6 +97,10 @@ namespace CESSCompatTestStaging
             // arrange means firing it into a world that has not caught up.
             public bool mutated;
             public string diagnostic;  // an unexpected error or warning seen during it
+            // Diagnostics THIS phase deliberately provokes (e.g. SS's equip-refusal
+            // warnings). Scoped per phase on purpose: the same warning appearing in any
+            // other phase is a finding, and a global allowlist entry would mask it.
+            public string[] expectedDiagnostics;
         }
 
         /// <summary>
@@ -125,11 +129,6 @@ namespace CESSCompatTestStaging
             "[CETest] Scenario complete",
             "[CETest] Loadouts module",
             "[CETestStaging]",
-            // SS's own equip-time refusal warnings, provoked DELIBERATELY by the two
-            // reload-guard phases (a no-op switch and a blocked switch during a reload).
-            // Both are SS saying "I refused", with no error state behind them.
-            "Attepmpted to equip already-equipped weapon",
-            "SS: Blocked equip of",
             // RimBridge logs startup telemetry at Warning level and its startup straddles
             // the log baseline. Development tool, not shipped, nothing here provokes it.
             "[RimBridge] STARTUP_TIMING",
@@ -152,12 +151,39 @@ namespace CESSCompatTestStaging
         }
 
         /// <summary>
+        /// The baseline marks everything already logged as somebody else's — including
+        /// this mod's own load-time failures (a Prepare refusal, a Bootstrap per-class
+        /// error, the P07 transpiler's mismatch fallback), which happen during startup and
+        /// would otherwise only surface through whatever behavioral phase happens to sit
+        /// downstream. One sweep of the baselined messages for our own prefixes closes
+        /// that hole.
+        /// </summary>
+        private static string StartupDiagnostic()
+        {
+            foreach (LogMessage msg in Log.Messages)
+            {
+                if (msg.type != LogMessageType.Error && msg.type != LogMessageType.Warning)
+                {
+                    continue;
+                }
+                string text = msg.text ?? "";
+                if (text.Contains("[CE+SimpleSidearms]")
+                    || text.Contains("Loadouts module is ACTIVE")
+                    || text.Contains("scenarios are contaminated"))
+                {
+                    return text.Split('\n')[0];
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
         /// Returns the first unaccounted-for error or warning since the last call.
         /// Log.Messages is a capped queue, so this reads the whole of it every poll and
         /// remembers what it has already reported rather than tracking an index the queue
         /// can invalidate underneath it.
         /// </summary>
-        private string NewDiagnostic()
+        private string NewDiagnostic(Phase phase)
         {
             foreach (LogMessage msg in Log.Messages)
             {
@@ -171,6 +197,11 @@ namespace CESSCompatTestStaging
                     continue;
                 }
                 if (ExpectedDiagnostics.Any(e => text.Contains(e)))
+                {
+                    continue;
+                }
+                if (phase?.expectedDiagnostics != null
+                    && phase.expectedDiagnostics.Any(e => text.Contains(e)))
                 {
                     continue;
                 }
@@ -258,7 +289,12 @@ namespace CESSCompatTestStaging
         {
             try
             {
-                bool loadoutsActive = ModsConfig.IsActive("eebette.CESimpleSidearmsCompat.Loadouts");
+                // Two independent sentinels: the packageId (renameable) and the live
+                // Harmony owner list (survives a packageId rename — its own rename would
+                // still slip through, but both moving in one release is a smaller target).
+                bool loadoutsActive = ModsConfig.IsActive("eebette.CESimpleSidearmsCompat.Loadouts")
+                    || Harmony.GetAllPatchedMethods().Any(m =>
+                        Harmony.GetPatchInfo(m)?.Owners.Any(o => o.Contains("CESimpleSidearmsCompat.Loadouts")) ?? false);
                 Type mod = GenTypes.GetTypeInAnyAssembly("CESimpleSidearmsCompat.Loadouts.LoadoutsMod");
                 object settings = mod?.GetProperty("Settings")?.GetValue(null);
                 if (settings == null)
@@ -316,7 +352,7 @@ namespace CESSCompatTestStaging
             // Any unaccounted-for error or warning, from this mod or from CE or SS, fails
             // the phase it appeared in. Checked first: a phase that provoked a red error has
             // not passed, whatever its assertions say.
-            string diagnostic = NewDiagnostic();
+            string diagnostic = NewDiagnostic(phase);
             if (diagnostic != null)
             {
                 phase.failed = true;
@@ -678,6 +714,11 @@ namespace CESSCompatTestStaging
                 deadlineTicks = 1200,
                 checks =
                 {
+                    C("no-startup-errors-from-this-mod", () =>
+                    {
+                        string bad = StartupDiagnostic();
+                        return (bad == null, bad ?? "startup log clean");
+                    }),
                     C("all-compat-patches-applied", () =>
                     {
                         var mine = Harmony.GetAllPatchedMethods()
@@ -867,13 +908,25 @@ namespace CESSCompatTestStaging
                     // every spare copy of a remembered pair undroppable forever.
                     label = "spare-copies-of-a-remembered-pair-are-droppable",
                     deadlineTicks = 4000,
-                    arrange = () =>
+                    checks =
                     {
-                        // The re-remember phase leaves SS's memory holding THREE pistol
-                        // entries (its multiset semantics, no upstream dupe guard) — and the
-                        // exemption honours the multiset, so three remembered entries would
-                        // legitimately protect all three copies. This phase is about SPARES
-                        // BEYOND the memory: normalize to exactly one entry first.
+                        P("world-is-ticking", () =>
+                            (Find.TickManager.TicksGame > 60, $"tick={Find.TickManager.TicksGame}")),
+                        C("enforcement-converges-on-the-remembered-copy", () =>
+                        {
+                            int remaining = CarriedOfDef(bulky, pistol);
+                            return (spareCount == 2 && remaining == 1 && !spareExcess,
+                                $"pistolDrops={spareCount} pistolsLeft={remaining} excessAfter={spareExcess} "
+                                + "(want: two pistol drops, one kept, no excess)");
+                        }),
+                    },
+                    mutate = () =>
+                    {
+                        // Everything synchronous with the capture: Bulky's staged loadout is
+                        // dropUndefined, so CE's own enforcement consumes the unshielded
+                        // spares within a few ticks of their existence — polling after even
+                        // one tick races the very behavior under test (observed: the spares
+                        // were gone before the check's first evaluation).
                         CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(bulky);
                         while (memory.RememberedWeapons.Count(pr => pr.thing == pistol) > 1)
                         {
@@ -883,28 +936,38 @@ namespace CESSCompatTestStaging
                         {
                             memory.InformOfAddedSidearm(Carried(bulky, pistol));
                         }
-                        // Two spare pistols straight into the pack; the staged one is
-                        // remembered, these are the battlefield pickups of the bug report.
-                        while (CarriedOfDef(bulky, pistol) < 3)
+                        while (bulky.inventory.innerContainer.Count(t => t.def == pistol)
+                               + (bulky.equipment?.Primary?.def == pistol ? 1 : 0) < 3)
                         {
                             pawnInventoryAdd(bulky, pistol);
                         }
-                    },
-                    checks =
-                    {
-                        P("one-remembered-three-carried", () =>
+                        bulky.TryGetComp<CompInventory>().UpdateInventory();
+                        // Unstackable weapons converge one instance per pass (CE's dropCount
+                        // is capped by the named instance's stackCount of 1), so drive the
+                        // convergence synchronously: each proposal is consumed and the scan
+                        // re-asked. The shield must yield exactly two proposals — the two
+                        // spares — and then silence with the remembered copy still carried.
+                        // Enact CE's enforcement faithfully: consume EVERY proposal (the
+                        // loadout is dropUndefined, so other uncovered staged items are
+                        // legitimately excess too and can precede the pistols in scan
+                        // order), counting the pistol drops. The shield must yield exactly
+                        // two pistol proposals and leave the remembered copy carried.
+                        spareCount = 0;
+                        spareDef = pistol;
+                        for (int guard = 0; guard < 12; guard++)
                         {
-                            int remembered = CompSidearmMemory.GetMemoryCompForPawn(bulky)
-                                .RememberedWeapons.Count(pr => pr.thing == pistol);
-                            int carried = CarriedOfDef(bulky, pistol);
-                            return (remembered == 1 && carried == 3, $"remembered={remembered} carried={carried}");
-                        }),
-                        C("excess-names-a-spare-pistol", () =>
-                        {
-                            bool excess = Utility_HoldTracker.GetExcessThing(bulky, out Thing dropThing, out int n);
-                            return (excess && dropThing?.def == pistol,
-                                $"excess={excess} dropThing={dropThing?.def?.defName ?? "none"} count={n}");
-                        }),
+                            spareExcess = Utility_HoldTracker.GetExcessThing(bulky, out Thing dropThing, out int n);
+                            if (!spareExcess || dropThing == null)
+                            {
+                                break;
+                            }
+                            if (dropThing.def == pistol)
+                            {
+                                spareCount++;
+                            }
+                            dropThing.Destroy(DestroyMode.Vanish);
+                            bulky.TryGetComp<CompInventory>().UpdateInventory();
+                        }
                     }
                 },
                 new Phase
@@ -930,6 +993,69 @@ namespace CESSCompatTestStaging
                             bool pistolTargeted = excess && dropThing?.def == pistol;
                             return (!pistolTargeted, $"excess={excess} dropThing={dropThing?.def?.defName ?? "none"}");
                         }),
+                    }
+                },
+                new Phase
+                {
+                    // The multi-stuff wedge (adversarial round 3): CE counts excess per
+                    // DEF, the old veto protected per PAIR — one remembered steel knife
+                    // plus a plasteel pickup meant CE flagged one-too-many forever and the
+                    // veto blocked the trim forever. The storage shield works at CE's own
+                    // def level, so the unremembered material trims.
+                    label = "a-second-material-of-a-remembered-def-still-trims",
+                    deadlineTicks = 4000,
+                    checks =
+                    {
+                        P("world-is-ticking", () =>
+                            (Find.TickManager.TicksGame > 60, $"tick={Find.TickManager.TicksGame}")),
+                        C("enforcement-keeps-exactly-one-knife", () =>
+                            (stuffCount == 1 && !stuffExcess,
+                             $"knivesLeft={stuffCount} survivorStuff={stuffDef?.defName ?? "none"} excessAfter={stuffExcess} "
+                             + "(want: one knife survives, no excess — WHICH material survives is CE's "
+                             + "instance naming, the acknowledged seam in P10's header)")),
+                    },
+                    mutate = () =>
+                    {
+                        // Steel copy (remembered), plasteel copy (the battlefield pickup) —
+                        // setup and capture in one synchronous act, because the loadout is
+                        // dropUndefined and CE eats the unshielded copy within ticks.
+                        CompSidearmMemory memory = CompSidearmMemory.GetMemoryCompForPawn(bulky);
+                        while (memory.RememberedWeapons.Any(pr => pr.thing == D("MeleeWeapon_Knife")))
+                        {
+                            memory.ForgetSidearmMemory(memory.RememberedWeapons.First(pr => pr.thing == D("MeleeWeapon_Knife")));
+                        }
+                        foreach (Thing old in bulky.inventory.innerContainer.Where(t => t.def == D("MeleeWeapon_Knife")).ToList())
+                        {
+                            old.Destroy(DestroyMode.Vanish);
+                        }
+                        var steel = (ThingWithComps)ThingMaker.MakeThing(D("MeleeWeapon_Knife"), D("Steel"));
+                        var plasteel = (ThingWithComps)ThingMaker.MakeThing(D("MeleeWeapon_Knife"), D("Plasteel"));
+                        bulky.inventory.innerContainer.TryAdd(steel, canMergeWithExistingStacks: false);
+                        bulky.inventory.innerContainer.TryAdd(plasteel, canMergeWithExistingStacks: false);
+                        bulky.TryGetComp<CompInventory>().UpdateInventory();
+                        memory.InformOfAddedSidearm(steel);
+                        // Converge CE's enforcement synchronously (other uncovered staged
+                        // items — loose ammo — legitimately precede the knife in scan
+                        // order on a fresh save): consume every proposal, then judge the
+                        // end state. The def-level shield must leave exactly one knife,
+                        // and it must be the remembered STEEL one only because it was the
+                        // last of its def standing — instance naming stays CE's (the
+                        // acknowledged seam in P10's header) — so the plasteel copy is
+                        // what the proposals consumed.
+                        for (int guard = 0; guard < 20; guard++)
+                        {
+                            stuffExcess = Utility_HoldTracker.GetExcessThing(bulky, out Thing dropThing, out int _);
+                            if (!stuffExcess || dropThing == null)
+                            {
+                                break;
+                            }
+                            dropThing.Destroy(DestroyMode.Vanish);
+                            bulky.TryGetComp<CompInventory>().UpdateInventory();
+                        }
+                        var survivors = bulky.inventory.innerContainer
+                            .Where(t => t.def == D("MeleeWeapon_Knife")).ToList();
+                        stuffCount = survivors.Count;
+                        stuffDef = survivors.FirstOrDefault()?.Stuff;
                     }
                 },
                 new Phase
@@ -969,6 +1095,22 @@ namespace CESSCompatTestStaging
                     },
                     mutate = () =>
                     {
+                        // Phase independence: the two-stuff phase leaves a carried steel
+                        // knife AND its memory entry behind — the copy would satisfy the
+                        // knife memory (nulling the second pass), and the leftover memory
+                        // makes SS fetch the knife on the FIRST pass, before the loop ever
+                        // reaches the heavy gun.
+                        CompSidearmMemory cleanup = CompSidearmMemory.GetMemoryCompForPawn(bulky);
+                        while (cleanup.RememberedWeapons.Any(pr => pr.thing == D("MeleeWeapon_Knife")))
+                        {
+                            cleanup.ForgetSidearmMemory(cleanup.RememberedWeapons.First(pr => pr.thing == D("MeleeWeapon_Knife")));
+                        }
+                        foreach (Thing carriedKnife in bulky.inventory.innerContainer
+                            .Where(t => t.def == D("MeleeWeapon_Knife")).ToList())
+                        {
+                            carriedKnife.Destroy(DestroyMode.Vanish);
+                        }
+                        bulky.TryGetComp<CompInventory>().UpdateInventory();
                         SpawnNear(bulky, D("Gun_Minigun"), null);
                         SpawnNear(bulky, D("MeleeWeapon_Knife"), D("Steel"));
                         CompInventory inv = bulky.TryGetComp<CompInventory>();
@@ -1047,6 +1189,13 @@ namespace CESSCompatTestStaging
         private ThingWithComps meleeGladius;
 
         // Captured synchronously inside the retrieval-skip phase.
+        private bool spareExcess;
+        private ThingDef spareDef;
+        private int spareCount;
+        private bool stuffExcess;
+        private ThingDef stuffDef;
+        private int stuffCount;
+
         private Verse.AI.Job retrievalFirstPass;
         private Verse.AI.Job retrievalSecondPass;
         private string retrievalDebug;
@@ -1482,6 +1631,7 @@ namespace CESSCompatTestStaging
                     // cost the reload.
                     label = "a-no-op-switch-keeps-the-reload",
                     deadlineTicks = 15000,
+                    expectedDiagnostics = new[] { "Attepmpted to equip already-equipped weapon" },
                     arrange = () =>
                     {
                         scopey.drafter.Drafted = false;
@@ -1525,6 +1675,7 @@ namespace CESSCompatTestStaging
                     // reload instead of leaving the magazine empty until something notices.
                     label = "a-blocked-switch-restarts-the-reload",
                     deadlineTicks = 15000,
+                    expectedDiagnostics = new[] { "SS: Blocked equip of" },
                     arrange = () =>
                     {
                         scopey.drafter.Drafted = false;
@@ -1573,6 +1724,75 @@ namespace CESSCompatTestStaging
                         blockedSwitchResult = WeaponAssingment.equipSpecificWeapon(scopey, third,
                             dropCurrent: false, intentionalDrop: false);
                         reloadAfterBlockedSwitch = scopey.CurJobDef;
+                    }
+                },
+                new Phase
+                {
+                    // The reload guard keys on the job's own TargetB now: CE issues
+                    // ReloadWeapon jobs for INVENTORY guns too (gear-tab reload, top-offs),
+                    // and a backpack top-off does not conflict with equipping — the old
+                    // guard killed it and "repaired" by reloading the equipped gun instead.
+                    label = "an-inventory-top-off-survives-a-refused-switch",
+                    deadlineTicks = 15000,
+                    expectedDiagnostics = new[] { "SS: Blocked equip of" },
+                    checks =
+                    {
+                        P("topping-off-the-backpack-gun", () =>
+                        {
+                            bool reloading = scopey.CurJobDef == CE_JobDefOf.ReloadWeapon;
+                            bool inventoryGun = scopey.CurJob?.targetB.Thing is ThingWithComps g
+                                && g != scopey.equipment?.Primary;
+                            return (reloading && inventoryGun,
+                                $"job={scopey.CurJobDef?.defName ?? "none"} targetB={(scopey.CurJob?.targetB.Thing)?.def?.defName ?? "-"}");
+                        }),
+                        C("the-top-off-is-untouched", () =>
+                        {
+                            bool stillIt = topOffJobAfter == CE_JobDefOf.ReloadWeapon
+                                && topOffTargetAfter != null && topOffTargetAfter != scopey.equipment?.Primary;
+                            return (stillIt, $"jobAfter={topOffJobAfter?.defName ?? "none"} "
+                                + $"targetAfter={topOffTargetAfter?.def?.defName ?? "-"} (must be the backpack gun)");
+                        }),
+                    },
+                    arrange = () =>
+                    {
+                        scopey.drafter.Drafted = false;
+                        scopey.jobs.StopAll();
+                        // A drained backpack gun with spare ammo, and a blocked (biocoded)
+                        // pistol to provoke the refusal.
+                        ThingWithComps backpackGun = scopey.inventory.innerContainer
+                            .OfType<ThingWithComps>().FirstOrDefault(t => t.def == shotgun && t != scopey.equipment?.Primary);
+                        if (backpackGun == null)
+                        {
+                            backpackGun = (ThingWithComps)ThingMaker.MakeThing(shotgun);
+                            scopey.inventory.innerContainer.TryAdd(backpackGun, canMergeWithExistingStacks: false);
+                        }
+                        CompAmmoUser user = backpackGun.TryGetComp<CompAmmoUser>();
+                        user.ResetAmmoCount();
+                        user.CurMagCount = 0;
+                        var spare = ThingMaker.MakeThing((ThingDef)user.selectedAmmo);
+                        spare.stackCount = user.MagSize * 2;
+                        scopey.inventory.innerContainer.TryAdd(spare, canMergeWithExistingStacks: false);
+                        scopey.TryGetComp<CompInventory>().UpdateInventory();
+                        Verse.AI.Job reload = user.TryMakeReloadJob();
+                        if (reload != null)
+                        {
+                            scopey.jobs.StartJob(reload, JobCondition.InterruptForced);
+                        }
+                        if (!scopey.inventory.innerContainer.Any(t => t.def == D("Gun_Autopistol")))
+                        {
+                            var blocked = (ThingWithComps)ThingMaker.MakeThing(D("Gun_Autopistol"));
+                            blocked.TryGetComp<CompBiocodable>()?.CodeFor(Colonist("Fency"));
+                            scopey.inventory.innerContainer.TryAdd(blocked, canMergeWithExistingStacks: false);
+                        }
+                    },
+                    mutate = () =>
+                    {
+                        ThingWithComps blocked = scopey.inventory.innerContainer
+                            .OfType<ThingWithComps>().First(t => t.def == D("Gun_Autopistol"));
+                        WeaponAssingment.equipSpecificWeapon(scopey, blocked,
+                            dropCurrent: false, intentionalDrop: false);
+                        topOffJobAfter = scopey.CurJobDef;
+                        topOffTargetAfter = scopey.CurJob?.targetB.Thing as ThingWithComps;
                     }
                 },
                 new Phase
@@ -1757,6 +1977,9 @@ namespace CESSCompatTestStaging
                 },
             };
         }
+
+        private JobDef topOffJobAfter;
+        private ThingWithComps topOffTargetAfter;
 
         // Captured synchronously inside the arbitration phases.
         private JobDef dryFireJob;
