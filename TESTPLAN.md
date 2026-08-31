@@ -58,7 +58,7 @@ Runner discipline (2026-08-28 machinery, ported from the Loadouts module's suite
 - **Every phase carries a `state` dump** (memory, carried, preferences, primary,
   bulk, job) for forensics; a scenario-specific colonist is followed by default.
 - **Phase 0 of every scenario is the patch census**: reflection over Harmony for
-  methods patched by `eebette.CESimpleSidearmsCompat` (>= 19 today). A Prepare
+  methods patched by `eebette.CESimpleSidearmsCompat` (>= 23 today). A Prepare
   that quietly skipped, a Bootstrap per-class failure, or a TargetMethods that
   resolved nothing shows up before any behavioral phase runs half-patched.
 - **Isolated sweep**: `./test/run-isolated.sh <scenario> <save>` runs every phase
@@ -70,10 +70,13 @@ Runner discipline (2026-08-28 machinery, ported from the Loadouts module's suite
   without it (not VOID, not unevaluated), restores it, proves the whole scenario
   passes. A check that has never been seen to fail is an assertion, not a test —
   new failing-capable checks get one of these before they are trusted.
-- The Loadouts module's derivations are switched off in-memory for CETEST runs
-  (`DisableLoadoutsModule`, keyed to its current `CESimpleSidearmsCompat.Loadouts`
-  identity). If the module is active but the reflection misses, the runner
-  fails LOUD instead of silently testing a contaminated world.
+- Downstream modules are switched off in-memory for CETEST runs — Loadouts
+  (`DisableLoadoutsModule`, keyed to its `CESimpleSidearmsCompat.Loadouts`
+  identity) and Tactics (`DisableTacticsModule`: every feature toggle forced
+  off; the module ships them ON by default, so 2026-08-31 every earlier CETEST
+  run had its findBest re-ranks and reload-abort component silently active —
+  green, but contaminated). If a module is active but the reflection misses,
+  the runner fails LOUD instead of silently testing a contaminated world.
 
 Full green pass recorded 2026-08-20 (all four scenarios, zero exceptions in logs)
 on the old latching machinery; re-verified green 2026-08-28 on the current
@@ -101,6 +104,14 @@ Known staging weaknesses (queue):
 - The cetest2 targeting hostile appears to include a mechanoid, which cannot be
   disarmed (`DisarmHostiles` strips carried weapons only) — a lingering red run
   still gets Picky shot. Same mitigation: red runs only.
+- cetest3 is the flakiest scenario (3 green / 2 red over five 2026-08-31 runs),
+  with two distinct environmental red modes: `cqc-melee-draw` timing out when
+  the raider's AI never closes to melee, and Scopey's kit vanishing during a
+  long phase-1 window (the strip/distress-drop weakness above) which voids
+  everything downstream. Neither mode implicates the patches — the same build
+  went 11/11 three times. Staging hardening when the saves are next
+  regenerated: park the CQC raider adjacent, and give the colonists CE loadout
+  rows covering their kit.
 
 Suite lessons the phases now encode (2026-08-28, learned the hard way while
 landing the R2 fixes):
@@ -172,6 +183,18 @@ P04-armed raiders while the earlier phases run, which was the other way he died)
 axis-10 hold-record lifecycle + dedup, axis-4 per-raider capacity audit
 + orphan-ammo scan + generator idempotence. The Loadouts module's derivations are
 disabled in-memory for these runs, so they exercise the compat patch alone.
+
+Axis 13 (2026-08-31, found from the Tactics module's consumption of these
+numbers): CE tags ToolCE entries with weapon-anatomy linkedBodyPartsGroups
+(Blade, Point, Edge), and vanilla's melee accessors multiply each tool's damage
+by the ATTACKER's part efficiency in that group — zero for a human holding a
+blade, while Handle and Head coincide with real human part groups and survive.
+SS's whole melee ranking therefore read every CE blade as its handle (a club
+outranked a longsword everywhere SS ranks melee). P13 owns the damage and speed
+inputs for ToolCE weapons in the axis-12 pattern; `ce-melee-damage-signal`
+(cetest2) pins a steel gladius scoring as a blade (20.5 vs the handle-only ~0.9),
+and the census rises to 23. Selection-time only — no per-tick cost, so no new
+bench row.
 
 Findings worth knowing (none are compat-patch defects):
 - **SS upstream quirk:** `CompSidearmMemory.InformOfAddedSidearm` has no duplicate

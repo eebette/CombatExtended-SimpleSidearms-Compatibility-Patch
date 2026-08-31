@@ -251,6 +251,7 @@ namespace CESSCompatTestStaging
                 try
                 {
                     DisableLoadoutsModule();
+                    DisableTacticsModule();
                     phases = BuildScenario(scenario);
                     // Every phase carries the state dump; forgetting to add it per-phase is
                     // exactly the kind of omission it exists to catch.
@@ -292,6 +293,51 @@ namespace CESSCompatTestStaging
         /// (in-memory only — no WriteSettings) so CETEST scenarios exercise the compat
         /// patch alone.
         /// </summary>
+        /// <summary>
+        /// Same isolation for the Tactics module, which ships its behaviors ON by
+        /// default: with it in the mod list, its findBest re-ranks and reload-abort
+        /// component would run inside every CETEST scenario. All its behaviors are
+        /// toggle-gated, so switching the toggles off in-memory is a full disable.
+        /// </summary>
+        private static void DisableTacticsModule()
+        {
+            try
+            {
+                bool tacticsActive = ModsConfig.IsActive("eebette.CESimpleSidearmsCompat.Tactics")
+                    || Harmony.GetAllPatchedMethods().Any(m =>
+                        Harmony.GetPatchInfo(m)?.Owners.Any(o => o.Contains("CESimpleSidearmsCompat.Tactics")) ?? false);
+                Type mod = GenTypes.GetTypeInAnyAssembly("CESSCompatTactics.TacticsMod");
+                object settings = mod?.GetProperty("Settings")?.GetValue(null);
+                if (settings == null)
+                {
+                    if (tacticsActive)
+                    {
+                        Log.Error("[CETest] Tactics module is ACTIVE but its settings type was not "
+                                  + "found (renamed?) — scenarios are contaminated by its features.");
+                    }
+                    return;
+                }
+                string[] toggles = { "reloadAbort", "forcedDryFallthrough", "ammoDepthTiebreak",
+                                     "targetAwareAmmoScoring", "armorAwareMelee" };
+                foreach (string name in toggles)
+                {
+                    FieldInfo field = settings.GetType().GetField(name);
+                    if (field == null)
+                    {
+                        Log.Error($"[CETest] Tactics settings found but '{name}' is gone — cannot switch "
+                                  + "that feature off; scenarios are contaminated by it.");
+                        continue;
+                    }
+                    field.SetValue(settings, false);
+                }
+                Log.Message("[CETest] Tactics module switched off (in-memory) for this run.");
+            }
+            catch (Exception e)
+            {
+                Log.Error("[CETest] Could not disable Tactics module — scenarios may be contaminated: " + e.Message);
+            }
+        }
+
         private static void DisableLoadoutsModule()
         {
             try
@@ -738,15 +784,16 @@ namespace CESSCompatTestStaging
                                 return info != null && info.Owners.Contains("eebette.CESimpleSidearmsCompat");
                             })
                             .ToList();
-                        // 21 distinct methods today: P01 x3 (capacity gate, retrieval
+                        // 23 distinct methods today: P01 x3 (capacity gate, retrieval
                         // postfix+scope on one method, hasWeaponType), P02 x3, P03 x2,
                         // P04 x1, P05 x2 (one shared with P09's dry-run), P06 x1, P07 x1
                         // (SS's own warmup postfix, transpiled), P08 x2 (SelfConsume
-                        // declarations), P09 x2, P10 x2, P11 x2, P12 x1 (MeleePenetration).
+                        // declarations), P09 x2, P10 x2, P11 x2, P12 x1 (MeleePenetration),
+                        // P13 x2 (getMeleeDPSBiased, MeleeSpeed).
                         // ">=" so an upstream adding a third SelfConsume declaration cannot
                         // fail the census.
-                        return (mine.Count >= 21,
-                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 21): "
+                        return (mine.Count >= 23,
+                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 23): "
                             + string.Join(", ", mine.Select(m => m.DeclaringType?.Name + "." + m.Name).OrderBy(n => n)));
                     }),
                 }
@@ -1405,6 +1452,47 @@ namespace CESSCompatTestStaging
                             // vanilla stub gives a damage-proportional ~1:1 ratio.
                             return (mace > gladius * 1.8f && mace > 0.3f,
                                 $"mace={mace:F3} gladius={gladius:F3} ratio={(gladius > 0 ? mace / gladius : -1):F2}");
+                        }),
+                    }
+                },
+                new Phase
+                {
+                    // Axis 13: vanilla's melee damage accessor multiplies each tool by the
+                    // ATTACKER's part efficiency in the tool's linkedBodyPartsGroup — and CE
+                    // groups are weapon anatomy (Blade, Point), which no human has. Blades
+                    // therefore scored as their 1-damage handles in every SS melee rank
+                    // (a club outranked a longsword everywhere). The patch feeds SS
+                    // selection-weighted CE tool damage; a steel gladius's biased score
+                    // must sit well above its handle-only reading.
+                    label = "ce-melee-damage-signal",
+                    deadlineTicks = 4000,
+                    checks =
+                    {
+                        P("weapons-made", () =>
+                        {
+                            if (meleeMace == null)
+                            {
+                                meleeMace = (ThingWithComps)ThingMaker.MakeThing(D("MeleeWeapon_Mace"), D("Steel"));
+                                meleeGladius = (ThingWithComps)ThingMaker.MakeThing(D("MeleeWeapon_Gladius"), D("Steel"));
+                            }
+                            return (meleeMace != null && meleeGladius != null, "made");
+                        }),
+                        C("gladius-scores-as-a-blade-not-a-handle", () =>
+                        {
+                            float bias = PeteTimesSix.SimpleSidearms.SimpleSidearms.Settings.SpeedSelectionBiasMelee;
+                            float gladius = StatCalculator.getMeleeDPSBiased(meleeGladius, picky, bias, 0f);
+                            float mace = StatCalculator.getMeleeDPSBiased(meleeMace, picky, bias, 0f);
+                            // A handle-only gladius read sits near 1 dps; a real blade read
+                            // lands the same order of magnitude as the mace.
+                            return (gladius > 4f && gladius > mace * 0.35f,
+                                $"gladius={gladius:F2} mace={mace:F2}");
+                        }),
+                        C("blade-speed-is-the-blade's", () =>
+                        {
+                            float speed = StatCalculator.MeleeSpeed(meleeGladius, picky);
+                            // Handle-only read = the handle's own cooldown; the blade-weighted
+                            // read must differ from a pure handle figure and stay plausible.
+                            return (speed > 0.5f && speed < 3f, $"speed={speed:F2}");
                         }),
                     }
                 },
