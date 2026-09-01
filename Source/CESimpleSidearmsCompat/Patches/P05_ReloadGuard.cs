@@ -102,10 +102,15 @@ namespace CESimpleSidearmsCompat.Patches
                 return;
             }
             // The gun the job is actually feeding is its TargetB — CE issues ReloadWeapon
-            // jobs for INVENTORY guns too (gear-tab reload, JobGiver_CheckReload top-offs),
-            // and a backpack top-off does not conflict with equipping at all: the gun
-            // stays where the driver expects it. Only a reload of the equipped primary is
-            // orphaned by a swap.
+            // jobs for INVENTORY guns too (gear-tab reload, JobGiver_CheckReload top-offs).
+            // Those are deliberately left alone, but NOT because they coexist with
+            // equips: CE's reload driver fails the job on ANY primary change
+            // (JobDriver_Reload.HasNoGunOrAmmo's initEquipment clause), backpack
+            // reloads included (T3-9). A swap mid-top-off kills the job with the
+            // rounds already unloaded to inventory at issuance — acceptable, because
+            // nothing is lost and the top-off re-issues on the next think pass. What
+            // this guard protects is only the equipped-primary reload, where a swap
+            // means the pawn is left holding a different gun than the one half-fed.
             var reloading = pawn.CurJob?.targetB.Thing as ThingWithComps;
             if (reloading == null || reloading != pawn.equipment?.Primary)
             {

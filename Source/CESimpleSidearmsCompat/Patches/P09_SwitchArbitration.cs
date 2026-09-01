@@ -181,10 +181,21 @@ namespace CESimpleSidearmsCompat.Patches
         private static ThingWithComps answer;
         private static bool answered;
 
-        public static bool Prepare() => PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
-                new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
-                "asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.")
-            && SSEnums.Require("asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.");
+        /// <summary>Whether the halting prefix below actually installed. AskSS refuses
+        /// to ask without it: the two halves of this seam fail INDEPENDENTLY (separate
+        /// Prepare guards), and asking with no blocker in place would run SS's
+        /// preference tree FOR REAL inside CE's weapon search — real equips, possible
+        /// fumble-drops — instead of a hypothetical (T3-8).</summary>
+        private static bool installed;
+
+        public static bool Prepare()
+        {
+            installed = PatchGuard.Require(typeof(WeaponAssingment), "equipSpecificWeapon",
+                    new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) },
+                    "asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.")
+                && SSEnums.Require("asking Simple Sidearms which weapon it prefers finds no answer, so Combat Extended's own pick is used.");
+            return installed;
+        }
 
         /// <summary>
         /// The weapon SS would equip right now. <paramref name="decided"/> separates SS's two
@@ -194,6 +205,14 @@ namespace CESimpleSidearmsCompat.Patches
         /// </summary>
         public static ThingWithComps AskSS(Pawn pawn, out bool decided)
         {
+            if (!installed)
+            {
+                Log.ErrorOnce("[CE+SimpleSidearms] The dry-run blocker is not installed (upstream drift?) — "
+                              + "refusing to ask Simple Sidearms for a preference; Combat Extended's own "
+                              + "pick is used.", 0x43455317);
+                decided = false;
+                return null;
+            }
             askingFor = pawn;
             answer = null;
             answered = false;
