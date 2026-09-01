@@ -59,6 +59,59 @@ namespace CESimpleSidearmsCompat
     }
 
     /// <summary>
+    /// IL checksum guard for upstream methods whose SHAPE a patch depends on beyond
+    /// what its anchors can see (ported from the Tactics module's convergence
+    /// round). P07's transpiler refuses to apply when its two anchors go missing —
+    /// but anchors can still MATCH inside a reshaped body, leaving the right
+    /// instruction patched in the wrong context. A changed checksum turns that
+    /// silent hazard into a loud re-verify error at load. With an empty expected
+    /// hash the computed value is logged for baking in.
+    /// </summary>
+    internal static class UpstreamFingerprint
+    {
+        // Baked against SS v1.6 — re-harvest on upstream updates.
+        internal const string StanceTickHash = "93dde9eafa5069a4";
+
+        internal static void Verify(Type type, string method, string expected, string protects)
+        {
+            try
+            {
+                var mb = AccessTools.Method(type, method);
+                if (mb == null)
+                {
+                    Log.Error($"{PatchGuard.LogPrefix}{type.Name}.{method} not found — {protects} "
+                              + "cannot be verified against upstream.");
+                    return;
+                }
+                ulong hash = 14695981039346656037UL; // FNV-1a
+                foreach (var instruction in HarmonyLib.PatchProcessor.GetOriginalInstructions(mb))
+                {
+                    string token = instruction.opcode.Name + (instruction.operand?.ToString() ?? "");
+                    foreach (char c in token)
+                    {
+                        hash = (hash ^ c) * 1099511628211UL;
+                    }
+                }
+                string computed = hash.ToString("x16");
+                if (string.IsNullOrEmpty(expected))
+                {
+                    Log.Message($"{PatchGuard.LogPrefix}FINGERPRINT {type.Name}.{method} = {computed} (bake me)");
+                    return;
+                }
+                if (computed != expected)
+                {
+                    Log.Error($"{PatchGuard.LogPrefix}{type.Name}.{method} changed shape upstream "
+                              + $"(fingerprint {computed}, expected {expected}) — re-verify {protects}.");
+                }
+            }
+            catch (Exception e)
+            {
+                Log.Warning($"{PatchGuard.LogPrefix}Fingerprint check for {type.Name}.{method} failed to run: " + e.Message);
+            }
+        }
+    }
+
+    /// <summary>
     /// SS enum values, re-resolved BY NAME at load. The C# compiler bakes enum members to
     /// integers from the reference assembly, so an upstream insertion mid-enum silently
     /// rewires every baked comparison and every value passed into SS — zero log lines,

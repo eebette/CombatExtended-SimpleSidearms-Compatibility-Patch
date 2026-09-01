@@ -40,11 +40,20 @@ namespace CESimpleSidearmsCompat.Patches
         // there is no outer/inner split to catch their JIT — a vanished CE type would
         // otherwise throw inside the stance tick, per warming pawn, per tick, taking SS's
         // vanilla feature down with a stack blaming SS (adversarial round 3).
-        public static bool Prepare() => PatchGuard.Require(typeof(Stance_Warmup_StanceTick_Postfix), "StanceTick",
+        public static bool Prepare()
+        {
+            // The transpiler's anchors refuse a NON-match; the fingerprint catches the
+            // other failure mode — anchors that still match inside a reshaped body
+            // (convergence round; see PatchGuard.UpstreamFingerprint).
+            UpstreamFingerprint.Verify(typeof(Stance_Warmup_StanceTick_Postfix), "StanceTick",
+                UpstreamFingerprint.StanceTickHash,
+                "the two IL anchors this transpiler edits around");
+            return PatchGuard.Require(typeof(Stance_Warmup_StanceTick_Postfix), "StanceTick",
                 new[] { typeof(Stance_Warmup) },
                 "mid-warmup switches to a more accurate ranged weapon stay dead under CE.")
             && PatchGuard.RequireType("CombatExtended.Verb_ShootCE",
                 "mid-warmup switches to a more accurate ranged weapon stay dead under CE.");
+        }
 
         /// <summary>
         /// Stack-neutral stand-in for the original `isinst Verb_Shoot`: pushes the verb for
