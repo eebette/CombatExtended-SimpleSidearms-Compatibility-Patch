@@ -86,7 +86,13 @@ namespace CESimpleSidearmsCompat
                 ulong hash = 14695981039346656037UL; // FNV-1a
                 foreach (var instruction in HarmonyLib.PatchProcessor.GetOriginalInstructions(mb))
                 {
-                    string token = instruction.opcode.Name + (instruction.operand?.ToString() ?? "");
+                    // Invariant formatting: float operands ToString by CurrentCulture,
+                    // and a co-loaded locale-setting mod would flip every hash into a
+                    // permanent false drift error (T4-4).
+                    string token = instruction.opcode.Name
+                        + (instruction.operand is IFormattable formattable
+                            ? formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture)
+                            : instruction.operand?.ToString() ?? "");
                     foreach (char c in token)
                     {
                         hash = (hash ^ c) * 1099511628211UL;
