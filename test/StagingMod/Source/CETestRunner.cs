@@ -157,7 +157,7 @@ namespace CESSCompatTestStaging
         /// <summary>
         /// The baseline marks everything already logged as somebody else's — including
         /// this mod's own load-time failures (a Prepare refusal, a Bootstrap per-class
-        /// error, the P07 transpiler's mismatch fallback), which happen during startup and
+        /// error, the warmup-auto-switch transpiler's mismatch fallback), which happen during startup and
         /// would otherwise only surface through whatever behavioral phase happens to sit
         /// downstream. One sweep of the baselined messages for our own prefixes closes
         /// that hole.
@@ -784,16 +784,16 @@ namespace CESSCompatTestStaging
                                 return info != null && info.Owners.Contains("eebette.CESimpleSidearmsCompat");
                             })
                             .ToList();
-                        // 23 distinct methods today: P01 x3 (capacity gate, retrieval
-                        // postfix+scope on one method, hasWeaponType), P02 x3, P03 x2,
-                        // P04 x1, P05 x2 (one shared with P09's dry-run), P06 x1, P07 x1
-                        // (SS's own warmup postfix, transpiled), P08 x2 (SelfConsume
-                        // declarations), P09 x2, P10 x2, P11 x2, P12 x1 (MeleePenetration),
-                        // P13 x2 (getMeleeDPSBiased, MeleeSpeed).
+                        // 22 distinct methods today: SidearmCapacity x2 (capacity gate, retrieval-search
+                        // fit validator), RangedDpsCE x3, AmmoAwareSelection x2,
+                        // NpcSidearmAmmo x1, ReloadGuard x2 (one shared with SwitchArbitration's dry-run), CqcMeleeCE x1,
+                        // WarmupAutoSwitchCE x1 (SS's own warmup postfix, transpiled), OneUseFallback x2 (SelfConsume
+                        // declarations), SwitchArbitration x2, LoadoutHoldSync x2, AmmoClassification x2,
+                        // MeleePenetrationCE x1 (MeleePenetration), MeleeDamageCE x2 (getMeleeDPSBiased, MeleeSpeed).
                         // ">=" so an upstream adding a third SelfConsume declaration cannot
                         // fail the census.
-                        return (mine.Count >= 23,
-                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 23): "
+                        return (mine.Count >= 22,
+                            $"methods patched by eebette.CESimpleSidearmsCompat={mine.Count} (want >= 22): "
                             + string.Join(", ", mine.Select(m => m.DeclaringType?.Name + "." + m.Name).OrderBy(n => n)));
                     }),
                 }
@@ -818,7 +818,7 @@ namespace CESSCompatTestStaging
             }
         }
 
-        // -- CETEST-1: axes 1 (bulk pickup) + 10 (hold sync) ----------------
+        // -- CETEST-1: bulk pickup + hold sync ----------------
 
         private List<Phase> BuildCetest1()
         {
@@ -854,9 +854,9 @@ namespace CESSCompatTestStaging
                         C("revolver-denial-not-bulk", () =>
                         {
                             // Pawn already holds rifle+pistol, so SS's own ranged-slot cap
-                            // legitimately denies a third ranged weapon. Axis 1 only owns the
+                            // legitimately denies a third ranged weapon. The sidearm-capacity patch only owns the
                             // BULK gate: the light revolver must never be rejected as too
-                            // heavy — its denial reason must be SS's slot cap, not P01.
+                            // heavy — its denial reason must be SS's slot cap, not the sidearm-capacity patch.
                             bool ok = StatCalculator.CanPickupSidearmType(new ThingDefStuffDefPair(revolver, null), bulky, out string err);
                             bool bulkDenial = err != null && err.Contains("heavy");
                             return (!bulkDenial, $"canPickup={ok} err='{err}' (must not be a bulk denial)");
@@ -1066,7 +1066,7 @@ namespace CESSCompatTestStaging
                             (stuffCount == 1 && !stuffExcess,
                              $"knivesLeft={stuffCount} survivorStuff={stuffDef?.defName ?? "none"} excessAfter={stuffExcess} "
                              + "(want: one knife survives, no excess — WHICH material survives is CE's "
-                             + "instance naming, the acknowledged seam in P10's header)")),
+                             + "instance naming, the acknowledged seam in the loadout-hold-sync patch's header)")),
                     },
                     mutate = () =>
                     {
@@ -1094,7 +1094,7 @@ namespace CESSCompatTestStaging
                         // end state. The def-level shield must leave exactly one knife,
                         // and it must be the remembered STEEL one only because it was the
                         // last of its def standing — instance naming stays CE's (the
-                        // acknowledged seam in P10's header) — so the plasteel copy is
+                        // acknowledged seam in the loadout-hold-sync patch's header) — so the plasteel copy is
                         // what the proposals consumed.
                         for (int guard = 0; guard < 20; guard++)
                         {
@@ -1115,8 +1115,10 @@ namespace CESSCompatTestStaging
                 new Phase
                 {
                     // Issue #20: SS's retrieval loop returns on the first unsatisfied memory
-                    // it can find an instance for. A capacity-refusal used to mean no
-                    // retrieval at all this pass — and a permanent map-wide rescan.
+                    // it can find an instance for, so an unfittable heavy memory used to block
+                    // every lighter one behind it (and rescan the map each pass). The live
+                    // capacity check skips it in-loop, so the knife behind it is fetched the
+                    // same pass — no null warm-up pass, no rescan.
                     label = "a-refused-heavy-memory-does-not-block-the-next",
                     deadlineTicks = 4000,
                     minTicks = 300, // window for the not-forgotten negative
@@ -1132,7 +1134,7 @@ namespace CESSCompatTestStaging
                             (setupBigWontFit && setupKnifeFits,
                              $"bigWontFit={setupBigWontFit} knifeFits={setupKnifeFits} {retrievalDebug}")),
                         C("first-pass-refuses-the-heavy-gun", () =>
-                            (retrievalFirstPass == null,
+                            (retrievalFirstPass?.targetA.Thing?.def != D("Gun_Minigun"),
                              $"job={retrievalFirstPass?.def?.defName ?? "null"} target={retrievalFirstPass?.targetA.Thing?.def?.defName ?? "-"}")),
                         C("second-pass-fetches-the-knife", () =>
                         {
@@ -1205,6 +1207,123 @@ namespace CESSCompatTestStaging
                         memory.InformOfAddedSidearm(bigThing);
                         retrievalDebug = $"third={third?.def?.defName ?? "null"}:{third?.targetA.Thing?.def?.defName ?? "-"} "
                             + $"knifeForbidden={knifeThing.IsForbidden(bulky)} reservable={bulky.CanReserve(knifeThing)}";
+                    }
+                },
+                new Phase
+                {
+                    // Loaded-gun regression — the abstract collapse's blind spot. CE's Mass and
+                    // Bulk carry instance-only StatParts (loaded ammo + attachments), so a gun's
+                    // BARE def can fit CE capacity while its LOADED instance does not. The reverted
+                    // abstract check saw only the bare def, reported "fits", never skipped, and
+                    // re-formed the same cancelled job every pass (issue #20). The validator reads
+                    // the real Thing, so it skips. The three setup pins put us squarely in that
+                    // band, or the phase fails as vacuous rather than passing for free.
+                    label = "a-loaded-gun-over-capacity-is-skipped-by-instance-not-abstract",
+                    deadlineTicks = 4000,
+                    minTicks = 300,
+                    checks =
+                    {
+                        P("world-is-ticking", () =>
+                            (Find.TickManager.TicksGame > 60, $"tick={Find.TickManager.TicksGame}")),
+                        C("bare-fits-but-loaded-does-not", () =>
+                            (loadedGunSetupValid, loadedGunSetup)),
+                        C("validator-skips-the-loaded-gun", () =>
+                            (retrievalLoadedPass?.targetA.Thing?.def != D("Gun_LMG"),
+                             $"job={retrievalLoadedPass?.def?.defName ?? "null"} target={retrievalLoadedPass?.targetA.Thing?.def?.defName ?? "-"}")),
+                        C("advances-to-the-fittable-knife", () =>
+                            (retrievalLoadedPass?.targetA.Thing?.def == D("MeleeWeapon_Knife"),
+                             $"target={retrievalLoadedPass?.targetA.Thing?.def?.defName ?? "-"}")),
+                        N("the-loaded-memory-is-not-forgotten", () =>
+                        {
+                            bool still = CompSidearmMemory.GetMemoryCompForPawn(bulky)
+                                .RememberedWeapons.Any(pr => pr.thing == D("Gun_LMG"));
+                            return (still, "lmg remembered=" + still);
+                        }),
+                    },
+                    mutate = () =>
+                    {
+                        // Independence: clear the prior phase's minigun + knife residue (memory
+                        // and any carried/map copies) so SS's loop reaches the LMG cleanly.
+                        CompSidearmMemory mem = CompSidearmMemory.GetMemoryCompForPawn(bulky);
+                        foreach (ThingDef d in new[] { D("Gun_Minigun"), D("MeleeWeapon_Knife"), D("Gun_LMG") })
+                        {
+                            while (mem.RememberedWeapons.Any(pr => pr.thing == d))
+                            {
+                                mem.ForgetSidearmMemory(mem.RememberedWeapons.First(pr => pr.thing == d));
+                            }
+                        }
+                        foreach (Thing carried in bulky.inventory.innerContainer
+                            .Where(t => t.def == D("MeleeWeapon_Knife") || t.def == D("Gun_LMG")).ToList())
+                        {
+                            carried.Destroy(DestroyMode.Vanish);
+                        }
+                        // Destroy any pre-existing map copies (the staged save spawns a loose,
+                        // UNLOADED Gun_LMG the search would otherwise fetch instead of the loaded
+                        // one under test).
+                        foreach (ThingDef mapDef in new[] { D("Gun_Minigun"), D("Gun_LMG") })
+                        {
+                            foreach (Thing onMap in bulky.Map.listerThings.ThingsOfDef(mapDef).ToList())
+                            {
+                                onMap.Destroy(DestroyMode.Vanish);
+                            }
+                        }
+                        CompInventory inv = bulky.TryGetComp<CompInventory>();
+                        inv.UpdateInventory();
+
+                        SpawnNear(bulky, D("Gun_LMG"), null);
+                        SpawnNear(bulky, D("MeleeWeapon_Knife"), D("Steel"));
+                        inv.UpdateInventory();
+                        ThingWithComps lmg = bulky.Map.listerThings.ThingsOfDef(D("Gun_LMG"))
+                            .OfType<ThingWithComps>().First(t => t.Spawned);
+                        ThingWithComps knife = bulky.Map.listerThings.ThingsOfDef(D("MeleeWeapon_Knife"))
+                            .OfType<ThingWithComps>().First(t => t.Spawned);
+
+                        // Fill the magazine so the instance carries loaded-ammo mass/bulk the bare
+                        // def does not. Force a concrete ammo so the overhead is never zero.
+                        CompAmmoUser au = lmg.TryGetComp<CompAmmoUser>();
+                        if (au != null)
+                        {
+                            AmmoDef ammo = au.CurrentAmmo ?? au.SelectedAmmo
+                                ?? au.CurAmmoSet?.ammoTypes?.FirstOrDefault()?.ammo;
+                            au.ResetAmmoCount(ammo);
+                        }
+
+                        float bareBulk = lmg.def.GetStatValueAbstract(CE_StatDefOf.Bulk, null);
+                        float bareMass = lmg.def.GetStatValueAbstract(StatDefOf.Mass, null);
+                        float loadedBulk = lmg.GetStatValue(CE_StatDefOf.Bulk);
+                        float loadedMass = lmg.GetStatValue(StatDefOf.Mass);
+
+                        // Ballast to the MIDDLE of the loaded/bare mass band, measured against a
+                        // RECOUNT (GetAvailableWeight(true)) so setup agrees with what the think
+                        // tree's validator sees. The gap is narrow (loaded ammo adds only mass
+                        // here, not bulk); a landing at the loaded edge flips under recount jitter,
+                        // and a coarse step overshoots past bare — either way the instance-vs-
+                        // abstract distinction this phase pins would not hold.
+                        float bandTarget = (bareMass + loadedMass) / 2f;
+                        for (int guard = 0; guard < 400 && inv.GetAvailableWeight(true) > bandTarget; guard++)
+                        {
+                            Thing steel = ThingMaker.MakeThing(D("Steel"));
+                            steel.stackCount = 1;
+                            bulky.inventory.innerContainer.TryAdd(steel, canMergeWithExistingStacks: false);
+                            inv.UpdateInventory();
+                        }
+                        float availBulk = inv.GetAvailableBulk(true);
+                        float availWeight = inv.GetAvailableWeight(true);
+
+                        bool loadedWontFit = !inv.CanFitInInventory(lmg, out int _);
+                        bool bareWouldFit = bareBulk <= availBulk && bareMass <= availWeight;
+                        bool loadedExceedsAbstract = loadedBulk > bareBulk + 0.001f || loadedMass > bareMass + 0.001f;
+                        loadedGunSetupValid = loadedWontFit && bareWouldFit && loadedExceedsAbstract;
+                        loadedGunSetup = $"loadedWontFit={loadedWontFit} bareWouldFit={bareWouldFit} "
+                            + $"loadedExceedsAbstract={loadedExceedsAbstract} | bulk bare={bareBulk:F1} "
+                            + $"loaded={loadedBulk:F1} avail={availBulk:F1} | mass bare={bareMass:F1} "
+                            + $"loaded={loadedMass:F1} avail={availWeight:F1}";
+
+                        lmg.SetForbidden(false, warnOnFail: false);
+                        knife.SetForbidden(false, warnOnFail: false);
+                        mem.InformOfAddedSidearm(lmg);
+                        mem.InformOfAddedSidearm(knife);
+                        retrievalLoadedPass = JobGiver_RetrieveWeapon.TryGiveJobStatic(bulky, inCombat: false);
                     }
                 },
                 new Phase
@@ -1295,8 +1414,11 @@ namespace CESSCompatTestStaging
         private string retrievalDebug;
         private bool setupBigWontFit;
         private bool setupKnifeFits;
+        private Verse.AI.Job retrievalLoadedPass;
+        private bool loadedGunSetupValid;
+        private string loadedGunSetup;
 
-        // -- CETEST-2: axes 2 (CE DPS), 3/9 (ammo-aware selection), 11 (classification) --
+        // -- CETEST-2: CE DPS, ammo-aware selection, classification --
 
         private List<Phase> BuildCetest2()
         {
@@ -1425,7 +1547,7 @@ namespace CESSCompatTestStaging
                 },
                 new Phase
                 {
-                    // Axis 12: SS's melee penetration term is dead under CE (vanilla stub =
+                    // Melee penetration: SS's melee penetration term is dead under CE (vanilla stub =
                     // damage x 0.015, near-uniform); the patch feeds it CE's real per-tool
                     // penetration. A mace's head (5.625 MPa blunt) must outrank a gladius
                     // (~0.45 mmRHA sharp) by a wide margin — under the dead stub both sit
@@ -1457,7 +1579,7 @@ namespace CESSCompatTestStaging
                 },
                 new Phase
                 {
-                    // Axis 13: vanilla's melee damage accessor multiplies each tool by the
+                    // Melee damage: vanilla's melee damage accessor multiplies each tool by the
                     // ATTACKER's part efficiency in the tool's linkedBodyPartsGroup — and CE
                     // groups are weapon anatomy (Blade, Point), which no human has. Blades
                     // therefore scored as their 1-damage handles in every SS melee rank
@@ -1543,9 +1665,9 @@ namespace CESSCompatTestStaging
             };
         }
 
-        // -- CETEST-3: axes 6 (CQC), 7 (warmup swap), 5 (reload guard) ------
+        // -- CETEST-3: CQC, warmup swap, reload guard ------
 
-        // Captured synchronously inside the axis-9 queued-equip phase; a poll-based check
+        // Captured synchronously inside the switch-arbitration queued-equip phase; a poll-based check
         // would race the job it is meant to observe.
         private ThingDef queuedFrom;
         private JobDef queuedJob;
@@ -1651,7 +1773,7 @@ namespace CESSCompatTestStaging
                             throw new InvalidOperationException("TryMakeReloadJob returned null (no spare ammo?)");
                         }
                         scopey.jobs.StartJob(reload, JobCondition.InterruptForced);
-                        // Axis 5 direct hit: while the reload job runs, fire SS's switch
+                        // Reload guard, direct hit: while the reload job runs, fire SS's switch
                         // entry point — the patch must refuse to cancel the reload.
                         WeaponAssingment.equipBestWeaponFromInventoryByPreference(scopey, DroppingModeEnum.Combat);
                     },
@@ -1682,7 +1804,7 @@ namespace CESSCompatTestStaging
                 },
                 new Phase
                 {
-                    // Axis 9, stopJob:false path (CE's CompReload calls it that way when a
+                    // Switch arbitration, stopJob:false path (CE's CompReload calls it that way when a
                     // pawn's gun is empty mid-cast). CE wants an interruptible
                     // EquipFromInventory job, not an instant swap — but it should be equipping
                     // SS's preferred weapon, not the first viable one in CE's own list order.
@@ -1932,7 +2054,7 @@ namespace CESSCompatTestStaging
                 },
                 new Phase
                 {
-                    // Axis 9, rebuilt (adversarial round 3): CE's main dry-gun path
+                    // Switch arbitration, rebuilt (adversarial round 3): CE's main dry-gun path
                     // (DoOutOfAmmoAction) searches for a replacement DIRECTLY — the old
                     // SwitchToNextViableWeapon-only seam never saw it, so CE equipped its
                     // first cached gun and SS was never asked. The pick must be SS's.
@@ -2129,7 +2251,7 @@ namespace CESSCompatTestStaging
         private JobDef reloadAfterBlockedSwitch;
         private bool blockedSwitchResult;
 
-        // -- CETEST-4: axes 4 (NPC sidearm ammo) + 8 (one-use fallback) -----
+        // -- CETEST-4: NPC sidearm ammo + one-use fallback -----
 
         // Where Boomy stood before being parked out of the raiders' reach; default when
         // the parking phase never ran (isolated run of the one-use phase).
@@ -2141,7 +2263,7 @@ namespace CESSCompatTestStaging
             ThingDef pistol = D("Gun_Autopistol");
 
             // The raider phases and the one-use phase share a map but must not share
-            // actors: P04 loads the raiders' guns, and a loaded raider volley killed
+            // actors: the NPC-sidearm-ammo patch loads the raiders' guns, and a loaded raider volley killed
             // Boomy twice while the earlier phases ran (dead=True forensics; isolated
             // runs — where the raiders die within a tick — never reproduced it).
             void ParkBoomy()
@@ -2267,7 +2389,7 @@ namespace CESSCompatTestStaging
                         // Strip FIRST: the staged raiders were provisioned when the save
                         // was created, and ForceRangedSidearm no-ops while a ranged
                         // ammo-using sidearm exists — the old phase regenerated nothing and
-                        // passed with P04 disabled (caught by a scratch A/B). Destroying
+                        // passed with the NPC-sidearm-ammo patch disabled (caught by a scratch A/B). Destroying
                         // the sidearms and their ammo forces a live generator pass through
                         // the patch.
                         Pawn raider = Hostiles().FirstOrDefault(h => !(h.RaceProps?.IsMechanoid ?? false));
@@ -2322,7 +2444,7 @@ namespace CESSCompatTestStaging
                             boomy.equipment.Primary.Destroy(DestroyMode.Vanish);
                         }
                         // Destroying the primary makes CE re-arm Boomy synchronously
-                        // (SwitchToNextViableWeapon on destroy — through P09 and SS), so by
+                        // (SwitchToNextViableWeapon on destroy — through the switch-arbitration patch and SS), so by
                         // here the pistol is usually already in hand. Route the grenade
                         // through CE's own switch API instead of AddEquipment, which errors
                         // on an occupied primary slot.
