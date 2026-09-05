@@ -5,34 +5,21 @@ using Verse;
 namespace CESimpleSidearmsCompat
 {
     /// <summary>
-    /// Failure doctrine for every patch class in this assembly, in three layers:
+    /// Failure doctrine for every patch class here — so a broken assumption turns a feature off,
+    /// never crashes:
     ///
-    /// 1. Attribute pins. Every [HarmonyPatch] names its target's full parameter list, so an
-    ///    upstream overload added later cannot make the attribute ambiguous — an ambiguous
-    ///    match throws inside the patch processor and Bootstrap can only report it
-    ///    generically.
-    ///
-    /// 2. Prepare guards. Each class re-resolves its pinned target here first; when the
-    ///    member is gone the class skips itself with a named, player-readable consequence
-    ///    instead of tripping the processor. Prepare runs per class, so one missing member
-    ///    costs exactly its own feature.
-    ///
-    /// 3. Outer/inner method splits. Patch bodies reference CE and Simple Sidearms members
-    ///    far beyond the patched method, and the JIT resolves those when the *body* first
-    ///    compiles — a missing member throws before the first instruction runs, where no
-    ///    try/catch inside the same method can see it. So each patch entry is a thin outer
-    ///    method (signature limited to types the patch target itself already proved) that
-    ///    calls the real body in a NoInlining inner method inside try/catch: upstream drift
-    ///    surfaces as one named error, and the original keeps running vanilla.
+    /// 1. Attribute pins — an exact target signature; a moved/renamed target won't bind.
+    /// 2. Prepare guards (Require/RequireType) — confirm the target + depended-on types exist,
+    ///    else log the gameplay consequence and skip the class.
+    /// 3. Thin-outer/NoInlining-inner split — the outer try/catch keeps a throw out of the game
+    ///    (Log.ErrorOnce) and falls back to upstream behavior.
     /// </summary>
     internal static class PatchGuard
     {
         internal const string LogPrefix = "[CE+SimpleSidearms] ";
 
         /// <summary>
-        /// Shared by every Prepare: no target, no feature, named error, no throw. The
-        /// parameter types are mandatory — AccessTools.Method with a null list rethrows on
-        /// an ambiguous match, which is the processor abort these guards exist to prevent.
+        /// Shared by every Prepare: check if target method exists.
         /// </summary>
         internal static bool Require(Type type, string method, Type[] args, string consequence)
         {
@@ -59,18 +46,18 @@ namespace CESimpleSidearmsCompat
     }
 
     /// <summary>
-    /// IL checksum guard for upstream methods whose SHAPE a patch depends on beyond
-    /// what its anchors can see (ported from the Tactics module's convergence
-    /// round). P07's transpiler refuses to apply when its two anchors go missing —
-    /// but anchors can still MATCH inside a reshaped body, leaving the right
-    /// instruction patched in the wrong context. A changed checksum turns that
-    /// silent hazard into a loud re-verify error at load. With an empty expected
-    /// hash the computed value is logged for baking in.
+    /// Hashes an upstream method's IL so a shape change we depend on beyond what our anchors see
+    /// (a reshaped body a transpiler would mis-edit) becomes a loud re-verify error at load, not
+    /// silent wrong behavior. To bake a hash: set it to "" — Verify then logs the computed value
+    /// ("bake me") — run once, paste it in.
     /// </summary>
     internal static class UpstreamFingerprint
     {
         // Baked against SS v1.6 — re-harvest on upstream updates.
         internal const string StanceTickHash = "93dde9eafa5069a4";
+
+        // Baked against SS v1.6 — re-harvest on upstream updates.
+        internal const string MeleeDpsBiasedHash = "9eb4ccaa82b9c104";
 
         internal static void Verify(Type type, string method, string expected, string protects)
         {
@@ -86,9 +73,7 @@ namespace CESimpleSidearmsCompat
                 ulong hash = 14695981039346656037UL; // FNV-1a
                 foreach (var instruction in HarmonyLib.PatchProcessor.GetOriginalInstructions(mb))
                 {
-                    // Invariant formatting: float operands ToString by CurrentCulture,
-                    // and a co-loaded locale-setting mod would flip every hash into a
-                    // permanent false drift error (T4-4).
+                    // Invariant formatting.
                     string token = instruction.opcode.Name
                         + (instruction.operand is IFormattable formattable
                             ? formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture)
@@ -118,12 +103,7 @@ namespace CESimpleSidearmsCompat
     }
 
     /// <summary>
-    /// SS enum values, re-resolved BY NAME at load. The C# compiler bakes enum members to
-    /// integers from the reference assembly, so an upstream insertion mid-enum silently
-    /// rewires every baked comparison and every value passed into SS — zero log lines,
-    /// green census. Parsing the names against the loaded assembly's enum makes that drift
-    /// either harmless (values follow the names) or loud (a vanished name fails the
-    /// consuming classes' Prepare with its consequence).
+    /// SS enum values.
     /// </summary>
     internal static class SSEnums
     {
