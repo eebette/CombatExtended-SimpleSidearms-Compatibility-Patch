@@ -85,11 +85,11 @@ machinery (sequenced + isolated, see the suite-can-fail proofs below).
 Suite-can-fail proofs (2026-08-28, scratch A/B — a patch class disabled via its
 Prepare, run, restored):
 
-- **P10 disabled** → cetest1: census FAIL naming exactly the two missing methods,
+- **LoadoutHoldSync disabled** → cetest1: census FAIL naming exactly the two missing methods,
   `forget-releases-hold` FAIL (CE dropped the unprotected pistol mid-run), and
   `re-remember-idempotent` VOID on its `pistol-carried` precondition. Three
   independent detections of one dead class.
-- **P03 disabled** → cetest2: census FAIL, and both behavioral phases VOID — see
+- **AmmoAwareSelection disabled** → cetest2: census FAIL, and both behavioral phases VOID — see
   the staging note below for why VOID and not FAIL.
 
 Known staging weaknesses (queue):
@@ -97,7 +97,7 @@ Known staging weaknesses (queue):
 - The CETEST colonists have no CE loadout rows (or hold records) covering their
   staged kit, so any run that lingers past a phase deadline gives CE's own
   loadout enforcement time to strip whatever Simple Sidearms does not remember
-  (observed: Picky stripped to bulk 0.0 during the P03 scratch's long red
+  (observed: Picky stripped to bulk 0.0 during the AmmoAwareSelection scratch's long red
   windows). Green runs never linger, so this only distorts *already-red* runs —
   but it turns a clean FAIL into a VOID cascade. Fix when next staging: give
   each CETEST colonist a CE loadout covering their kit.
@@ -138,8 +138,8 @@ landing the R2 fixes):
   precede the item under test on a fresh save). Phases judging the drop
   exemption converge synchronously in mutate — consume every proposal, assert
   the END STATE — and assert def-level counts only: which INSTANCE survives
-  mixed materials is CE's `FirstOrDefault`, the acknowledged seam in P10's
-  header.
+  mixed materials is CE's `FirstOrDefault`, the acknowledged seam in the
+  loadout-hold-sync patch's header.
 Accepted-behavior ledger (reviewed, deliberately not fixed):
 
 - **ScoreCache serves stale values while paused** — freshness is keyed to
@@ -149,7 +149,7 @@ Accepted-behavior ledger (reviewed, deliberately not fixed):
   type-level API offers no instance; a heavily-attachmented instance can slip
   slightly over bulk and CE's soft encumbrance absorbs it. The retrieval door
   uses instance stats and is exact.
-- **Silent-fragility watch list** (no fix without upstream movement): the P07
+- **Silent-fragility watch list** (no fix without upstream movement): the warmup-auto-switch
   transpiler's two first-match IL anchors; census count-masking on
   shared-target methods and compensating ±1 drift (behavioral phases are the
   real net); positional-argument drift in same-typed upstream signatures;
@@ -172,26 +172,26 @@ Accepted-behavior ledger (reviewed, deliberately not fixed):
   phase testing dry-gun arbitration must dry a gun that does NOT share a pair
   with the preference (the wielded-dry-copy gap itself is the parked forced-dry
   family, Tactics scope).
-Coverage highlights beyond the manual checklist: axis-5 direct unit hit (SS switch
-entry point invoked DURING a live CE reload job — reload survived), axis-8 full
+Coverage highlights beyond the manual checklist: reload-guard direct unit hit (SS switch
+entry point invoked DURING a live CE reload job — reload survived), one-use-fallback full
 chain (a one-use weapon actually fired at a ground cell, consumption →
 SS-preference re-equip; since 2026-08-28 the projectile is a CE smoke grenade —
 same Verb_ShootCEOneUse class as the staged rocket, but the rocket's FRAGMENTS
 reached far beyond its blast radius and downed or killed the shooter often
 enough to make the phase a coin flip; the phase also parks Boomy away from the
-P04-armed raiders while the earlier phases run, which was the other way he died),
-axis-10 hold-record lifecycle + dedup, axis-4 per-raider capacity audit
+raiders the NPC-sidearm-ammo patch armed while the earlier phases run, which was the other way he died),
+loadout-hold-sync hold-record lifecycle + dedup, NPC-sidearm-ammo per-raider capacity audit
 + orphan-ammo scan + generator idempotence. The Loadouts module's derivations are
 disabled in-memory for these runs, so they exercise the compat patch alone.
 
-Axis 13 (2026-08-31, found from the Tactics module's consumption of these
+Melee damage (2026-08-31, found from the Tactics module's consumption of these
 numbers): CE tags ToolCE entries with weapon-anatomy linkedBodyPartsGroups
 (Blade, Point, Edge), and vanilla's melee accessors multiply each tool's damage
 by the ATTACKER's part efficiency in that group — zero for a human holding a
 blade, while Handle and Head coincide with real human part groups and survive.
 SS's whole melee ranking therefore read every CE blade as its handle (a club
-outranked a longsword everywhere SS ranks melee). P13 owns the damage and speed
-inputs for ToolCE weapons in the axis-12 pattern; `ce-melee-damage-signal`
+outranked a longsword everywhere SS ranks melee). The melee-damage patch owns the damage and speed
+inputs for ToolCE weapons in the melee-penetration patch's pattern; `ce-melee-damage-signal`
 (cetest2) pins a steel gladius scoring as a blade (20.5 vs the handle-only ~0.9),
 and the census rises to 23. Selection-time only — no per-tick cost, so no new
 bench row.
@@ -222,7 +222,7 @@ Findings worth knowing (none are compat-patch defects):
 - Confirm patch installed: dev console shows
   `[CE+SimpleSidearms] Compatibility patches installed.`
 
-## Save 1 — "pickup" (axes 1, 10)
+## Save 1 — "pickup" (sidearm capacity, hold sync)
 
 Stage: 1 colonist. Fill inventory near CE bulk cap (spawn + force-carry armor
 plates / ammo crates). Spawn heavy sidearm (LMG) + light sidearm (pistol) nearby.
@@ -233,7 +233,7 @@ plates / ammo crates). Spawn heavy sidearm (LMG) + light sidearm (pistol) nearby
   Remember pistol as sidearm (SS gizmo). Wait/skip time → pawn must NOT drop it.
   Forget the sidearm in SS gizmo → CE should then drop it (exemption removed).
 
-## Save 2 — "selection" (axes 2, 3, 9, 11)
+## Save 2 — "selection" (ranged DPS, ammo-aware selection, switch arbitration, classification)
 
 Stage: 1 drafted colonist with: rifle (loaded), pistol sidearm (loaded), revolver
 sidearm (empty, NO spare .44 ammo in inventory). Caliber matters: the dry gun
@@ -259,10 +259,10 @@ Spawn hostile pirates at distance (Spawn pawn → faction pirate).
   auto-equips manual-use weapons for player colonists, and SS's out-of-ammo
   re-equip path hardcodes skip-EMP (no target context) — so don't expect a pawn
   to auto-draw EMP grenades even against mechs; that eligibility only exists in
-  the axis-7 mid-warmup swap, and only for non-manual EMP weapons (none in
+  the warmup-auto-switch mid-warmup swap, and only for non-manual EMP weapons (none in
   Core+CE).
 
-## Save 3 — "combat flow" (axes 5, 6, 7)
+## Save 3 — "combat flow" (reload guard, CQC, warmup swap)
 
 Stage: colonist A: ranged primary + melee sidearm (knife/gladius). Colonist B:
 sniper rifle + shotgun sidearm. Melee raider nearby.
@@ -280,7 +280,7 @@ sniper rifle + shotgun sidearm. Melee raider nearby.
   while reload job runs, SS must not cancel it (watch job readout; reload
   completes).
 
-## Save 4 — "generation + one-use" (axes 4, 8)
+## Save 4 — "generation + one-use" (NPC sidearm ammo, one-use fallback)
 
 - A4: staged raiders are force-fed the SS generator until each carries a ranged
   ammo-using sidearm (natural generation is chance-rolled; melee shivs are

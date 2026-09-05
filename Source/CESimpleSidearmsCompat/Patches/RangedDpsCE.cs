@@ -12,22 +12,8 @@ using Verse;
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 2: SS scores ranged weapons with vanilla verb stats, which are meaningless on CE
-    /// weapons (zeroed accuracy, ammo-driven damage, reload downtime). These patches make
-    /// SS's DPS ranking use CE's stat model; the speed bias the player sets still applies,
-    /// on this module's own curve (see CEDps).
-    /// </summary>
-    /// <summary>
-    /// Scoring runs once per carried weapon, per warming-up pawn, per tick — and SS asks for
-    /// the same four stats every time. Measured in-game on a four-weapon colonist, the
-    /// patched scoring path cost 4.2 us per weapon against stock Simple Sidearms' 0.84 us,
-    /// which at twenty pawns in a firefight is ~3.3% of a 60fps frame (test/run-bench.sh).
-    /// RimWorld's own cacheStaleAfterTicks did not move that: the repeated cost is the stat
-    /// dispatch itself, not the evaluation behind it.
-    ///
-    /// So the values are memoised for the tick that produced them. Everything cached here is
-    /// derived, read-only, and cannot change within a tick — weapon quality, attachments and
-    /// damage are all fixed for the frame, and the shooter's accuracy with them.
+    /// Makes SS's DPS ranking use CE's stat model; the speed bias the player sets still applies,
+    /// Scoring runs once per carried weapon, per warming-up pawn, per tick.
     /// </summary>
     internal static class ScoreCache
     {
@@ -61,11 +47,6 @@ namespace CESimpleSidearmsCompat.Patches
             hitFactors.Clear();
         }
 
-        /// <summary>
-        /// Split by consumer rather than cached as one record: the reload amortization runs
-        /// on its own for weapons the hit factor is never asked about, and filling in stats
-        /// that caller will not read costs more than it saves.
-        /// </summary>
         internal static Accuracy AccuracyOf(ThingWithComps weapon)
         {
             EnsureTick();
@@ -98,11 +79,6 @@ namespace CESimpleSidearmsCompat.Patches
             return stats;
         }
 
-        /// <summary>
-        /// One warming-up pawn scores every carried weapon against the same target, so the
-        /// (weapon, distance) hit factor repeats within the tick — and the CE hit model
-        /// behind it is the costliest part of the score.
-        /// </summary>
         internal static float HitFactorOf(ThingWithComps weapon, float distance, Func<float> compute)
         {
             EnsureTick();
@@ -126,7 +102,6 @@ namespace CESimpleSidearmsCompat.Patches
             "reload downtime will not count against a weapon's rating.");
 
         // Fold reload downtime into the cycle time so slow-reloading weapons rank lower.
-        // Also feeds SS's AverageSpeedRanged, keeping the bias baseline consistent.
         [HarmonyPostfix]
         public static void Postfix(ThingWithComps weapon, ref float __result)
         {
@@ -173,9 +148,7 @@ namespace CESimpleSidearmsCompat.Patches
     public static class StatCalculator_RangedDPS_Patch
     {
         /// <summary>
-        /// Stand-in range for the distance-free scoring path, which SS uses when no target is
-        /// known. SS averaged the weapon's short/medium/long accuracy stats there; this plays
-        /// the same role for CE weapons, which have those stats stripped.
+        /// Stand-in range for the distance-free scoring path.
         /// </summary>
         internal const float NoTargetReferenceDistance = 20f;
 
@@ -211,11 +184,6 @@ namespace CESimpleSidearmsCompat.Patches
                 __result = 0f;
                 return false;
             }
-            // Vanilla range semantics: the caller passes a plain cell distance
-            // (findBestRangedWeapon uses DistanceTo), so that is what the weapon's range is
-            // compared against. Stock SS squares the range on both sides of this gate, which
-            // lets a 30-cell gun stay scoreable out to 900 — CE-scored weapons use the
-            // corrected gate, so ordering can differ from stock SS at extreme range.
             if (atkProps.range < distance || atkProps.minRange > distance)
             {
                 __result = -1f;
@@ -261,7 +229,7 @@ namespace CESimpleSidearmsCompat.Patches
             });
         }
 
-        /// <summary>Reference silhouette a hypothetical shot is scored against — roughly a standing human.</summary>
+        /// <summary>Reference silhouette a hypothetical shot is scored against.</summary>
         internal const float ReferenceTargetWidth = 0.5f;
         internal const float ReferenceTargetHeight = 1.75f;
 
@@ -277,11 +245,7 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return 0f;
             }
-            // This module's own speed-bias curve: the raw rate is scaled by how the
-            // weapon's pace compares to the carried average, raised to the bias the player
-            // set. Bias 1 (the default) is exactly neutral; above it, slower-than-average
-            // weapons fall off multiplicatively. CE weapons rank on this curve, not on
-            // stock SS's — SS was asked to expose its own adjustment (issue #22 / V3).
+            // This module's own speed-bias curve.
             float paceFactor = averageSpeed > 0f
                 ? Mathf.Pow(averageSpeed / speed, speedBias - 1f)
                 : 1f;
@@ -325,12 +289,7 @@ namespace CESimpleSidearmsCompat.Patches
                 __result = 0f;
                 return false;
             }
-            // SS's own no-target formula ends by weighting damage with the weapon's accuracy
-            // stats, which for a CE gun resolve to the vanilla AccuracyBase fallback — i.e.
-            // purely the quality factor. Dropping that term made an awful gun score identical
-            // to a masterwork one, leaving carry order to decide. CE keeps quality (and
-            // attachments, and damaged parts) in ShotSpread, so scoring the hit proxy at a
-            // fixed reference range restores the signal without leaving CE's own model.
+            // Weight damage by the weapon's accuracy stats.
             __result = StatCalculator_RangedDPS_Patch.CEDps(weapon, ammoUser, atkProps, speedBias, averageSpeed)
                        * StatCalculator_RangedDPS_Patch.CEHitFactor(weapon, ammoUser, StatCalculator_RangedDPS_Patch.NoTargetReferenceDistance);
             return false;

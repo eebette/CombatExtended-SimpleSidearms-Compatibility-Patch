@@ -7,12 +7,10 @@ using Verse;
 namespace CESimpleSidearmsCompat
 {
     /// <summary>
-    /// The only type in this assembly the suite modules may bind to. Everything else here is
-    /// implementation and can be deleted or reshaped without notice — the Loadouts module
-    /// learned that the hard way by calling an internal helper that later stopped existing,
-    /// which compiles fine and fails at load. Treat the members below as an API: changing a
-    /// signature or its semantics means bumping the major version and updating the modules
-    /// that consume it (see RELEASING.md).
+    /// Shared CE-aware queries about a weapon: whether it follows CE's model, whether it can
+    /// fire, what it would fire, and who carries it.
+    ///
+    /// This is the only type in this assembly the suite modules may bind to.
     /// </summary>
     public static class CompatUtil
     {
@@ -64,17 +62,14 @@ namespace CESimpleSidearmsCompat
             return CurrentProjectile(weapon, weapon?.TryGetComp<CompAmmoUser>());
         }
 
-        /// <summary>
-        /// As above, for callers that already hold the comp — scoring paths resolve it once
-        /// and would otherwise pay for the lookup two or three times per candidate weapon.
-        /// </summary>
+        /// <summary>Projectile the weapon would currently fire, given its already-resolved ammo comp.</summary>
         public static ThingDef CurrentProjectile(ThingWithComps weapon, CompAmmoUser ammoUser)
         {
             if (ammoUser != null)
             {
-                // An empty magazine leaves CurrentAmmo pointing at the spent round — nothing
-                // clears it — while SelectedAmmo is what the next reload chambers. Classifying
-                // a dry EMP-selected gun by its last AP round is how it slips past skipEMP.
+                // An empty magazine leaves CurrentAmmo pointing at the spent round while
+                // SelectedAmmo is what the next reload chambers. Avoid classifying a gun by
+                // its last round.
                 if (ammoUser.HasMagazine && ammoUser.CurMagCount <= 0 && ammoUser.SelectedAmmoProjectile != null)
                 {
                     return ammoUser.SelectedAmmoProjectile;

@@ -12,24 +12,11 @@ using Verse;
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 8: SS re-equips after a one-use weapon is consumed by hooking vanilla
-    /// Verb_ShootOneUse.SelfConsume; CE's Verb_ShootCEOneUse is a separate class, so that
-    /// hook never fires. CE natively re-equips a same-def weapon (and otherwise calls
-    /// SwitchToNextViableWeapon, which axis 9 routes through SS preferences); this fallback
-    /// covers the remaining case where the pawn ends up empty-handed.
+    /// Asks SS to equip a sidearm if the pawn is left empty-handed after a CE one-use/thrown weapon is spent.
     /// </summary>
     [HarmonyPatch]
     public static class Verb_ShootCEOneUse_SelfConsume_Patch
     {
-        /// <summary>
-        /// SelfConsume is private, so a subclass declaring its own shadows the base rather
-        /// than overriding it — and Verb_ThrowGrenade does exactly that, which meant every
-        /// thrown weapon slipped past a patch on the base declaration alone.
-        ///
-        /// Each type is checked on its own so one silently un-shadowed declaration cannot
-        /// leave the others unpatched — and a miss is LOGGED, because an empty yield here
-        /// used to skip that verb type without a word.
-        /// </summary>
         public static bool Prepare() => SSEnums.Require(
             "pawns will stay empty-handed after throwing or consuming a one-use CE weapon.");
 
@@ -46,8 +33,6 @@ namespace CESimpleSidearmsCompat.Patches
                 }
                 else if (type != typeof(Verb_ShootCEOneUseStatic))
                 {
-                    // The Static subclass inherits rather than shadows today; its own
-                    // declaration appearing would be new, its absence is normal.
                     Log.Warning(PatchGuard.LogPrefix + type.Name + ".SelfConsume not found — pawns "
                                 + "using that verb will stay empty-handed after a one-use weapon. "
                                 + "Combat Extended probably reshaped it.");
@@ -82,9 +67,8 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
-            // CE's own SelfConsume switch logic skips opportunistic attacks on purpose —
-            // that job's finish action stows and restores the pre-attack weapon itself,
-            // and equipping here just adds a swap-and-swap-back flicker mid-job.
+            // Opportunistic attacks restore the pawn's weapon when the job ends, so
+            // re-equipping now would just swap it out and back.
             if (pawn.jobs?.curJob?.def == CE_JobDefOf.OpportunisticAttack)
             {
                 return;

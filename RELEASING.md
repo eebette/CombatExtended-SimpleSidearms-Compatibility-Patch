@@ -94,7 +94,7 @@ Semver tags, `v1.0.0` at first Workshop release.
 
 Two guarantees, both currently true and both **binding on every future change**:
 
-- **Safe to ADD mid-save.** All patches are lazy and save-agnostic; the axis-10
+- **Safe to ADD mid-save.** All patches are lazy and save-agnostic; the loadout-hold-sync
   drop exemption is answered from live SS memory, nothing needs to exist in the
   save beforehand.
 - **Safe to REMOVE mid-save.** There is no persistent footprint at all: the mod

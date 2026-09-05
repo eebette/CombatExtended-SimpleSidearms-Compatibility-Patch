@@ -12,32 +12,8 @@ using Verse;
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 9: when CE replaces a lost, consumed, or dry weapon, Simple Sidearms should
-    /// choose the replacement; CE keeps everything else — the job it queues, the mote, the
-    /// stow mechanics, the fists fallback.
-    ///
-    /// One choke point delivers that: every CE replacement path — the out-of-ammo action's
-    /// direct search, SwitchToNextViableWeapon's search (weapon destroyed, one-use
-    /// consumed), and the flare-gun swap-away — funnels through the public
-    /// CompInventory.TryFindViableWeapon. The prefix below substitutes SS's answer as the
-    /// weapon CE "found", and CE's own caller then does with it exactly what it would have
-    /// done with its own pick. When SS has no usable answer, CE's search runs untouched.
-    ///
-    /// History note (adversarial round 3): the previous shape patched only
-    /// SwitchToNextViableWeapon and re-entered CE's search restricted to SS's pick. That
-    /// missed CE's main dry-gun path entirely (DoOutOfAmmoAction searches directly), and
-    /// the re-entry was built on two traps — CE's fists branch strips the pawn and reports
-    /// success, and TryFindViableWeapon's predicate parameter is broken as shipped
-    /// (operator precedence ignores it for any loaded ammo-comp gun, and dereferences null
-    /// for ammo-comp-less ones; CE itself never passes a predicate, so the bug is latent
-    /// upstream — reported). Substituting at the search instead of re-entering removes
-    /// every one of those paths.
-    ///
-    /// Deliberate semantics change that came with the move: an instant CE-initiated swap
-    /// now equips SS's pick through CE's stow mechanics rather than SS's own equip (with
-    /// its fumble-drop rolls). The switch is CE's event; CE's mechanics own it. SS's
-    /// memory stays correct either way — its equip hooks observe the equipment change
-    /// itself.
+    /// Patches CE weapon replenishment to use SS item selection logic using a prefix on
+    /// CE's CompInventory.TryFindViableWeapon.
     /// </summary>
     [HarmonyPatch(typeof(CompInventory), nameof(CompInventory.TryFindViableWeapon),
                   new[] { typeof(ThingWithComps), typeof(bool), typeof(Func<ThingWithComps, CompAmmoUser, bool>) },
@@ -68,8 +44,7 @@ namespace CESimpleSidearmsCompat.Patches
         private static bool PrefixInner(CompInventory __instance, ref ThingWithComps weapon, bool useAOE,
                                         Func<ThingWithComps, CompAmmoUser, bool> predicate, ref bool __result)
         {
-            // Specialized CE calls (AOE requests, predicated searches) pass through — they
-            // are CE asking a narrower question than "what should this pawn hold".
+            // Specialized CE calls (AOE requests, predicated searches) pass through.
             if (useAOE || predicate != null)
             {
                 return true;
@@ -79,10 +54,7 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return true;
             }
-            // Kept although both current CE callers pre-check the tag themselves: this
-            // prefix must hold for any future caller too, and reading a weaponTag has one
-            // shape — convergent use of CE's published extension point, not a
-            // transcription (#22/V8 ruling).
+            // Return on any weapons tagged as NoSwitch
             if (pawn.equipment?.Primary?.def.weaponTags?.Contains("NoSwitch") ?? false)
             {
                 return true;
@@ -91,9 +63,7 @@ namespace CESimpleSidearmsCompat.Patches
             ThingWithComps pick = WeaponAssingment_equipSpecificWeapon_DryRun.AskSS(pawn, out bool ssDecided);
             if (!ssDecided)
             {
-                // SS's silence has two shapes (see AskSS): an already-unarmed pawn whose
-                // memory says "stay unarmed" never reaches an equip at all, and letting
-                // CE's search run would re-arm a pawn the player set to fists.
+                // Pawn's memory says "stay unarmed" never reaches an equip at all
                 if (WantsToStayUnarmed(pawn))
                 {
                     weapon = null;
@@ -111,16 +81,10 @@ namespace CESimpleSidearmsCompat.Patches
             }
             if (pick == pawn.equipment?.Primary)
             {
-                // Nothing this search can act on — CE's own search skips the primary too.
+                // Nothing this search can act on.
                 return true;
             }
-            // CE must actually be able to use the pick: the same public gates its own
-            // search applies — CanEquip, ammo, and its two def-level category refusals
-            // (no AOE weapon unless asked for one, never an illumination device). An
-            // unusable pick (a dry gun the player forced, a biocoded weapon, a flare
-            // launcher set as the default) hands the search back to CE unrestricted — its
-            // fists fallback then only fires when NOTHING is usable, instead of stripping
-            // the pawn because SS's first choice was.
+            // CE must actually be able to use the pick.
             CompAmmoUser ammoUser = pick.TryGetComp<CompAmmoUser>();
             if (!EquipmentUtility.CanEquip(pick, pawn)
                 || (ammoUser != null && !ammoUser.HasAndUsesAmmoOrMagazine)
@@ -129,10 +93,7 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return true;
             }
-            // And the pick must live where CE's swap mechanics expect it: SS can nominate
-            // things outside the inventory container (a Tacticowl offhand), and CE's
-            // instant path silently no-ops on those AFTER reporting success and stopping
-            // the pawn's jobs.
+            // And the pick must live where CE's swap mechanics expect it.
             if (!__instance.container.Contains(pick))
             {
                 return true;
@@ -143,10 +104,7 @@ namespace CESimpleSidearmsCompat.Patches
         }
 
         /// <summary>
-        /// Forced-unarmed, forced-unarmed-while-drafted and preferred-unarmed all leave
-        /// Primary null on success, so an empty hand is an answer rather than a failure.
-        /// Ask SS instead of inferring it from the equipment pointer, or CE re-arms a pawn
-        /// the player set to fists.
+        /// Does pawn want to be unarmed?
         /// </summary>
         private static bool WantsToStayUnarmed(Pawn pawn)
         {
@@ -156,22 +114,7 @@ namespace CESimpleSidearmsCompat.Patches
     }
 
     /// <summary>
-    /// Every branch of SS's preference tree — forced weapon, forced-while-drafted, default
-    /// ranged, preferred melee, unarmed, best-by-DPS — ends at this one method, and each
-    /// returns as soon as it succeeds.
-    ///
-    /// CONTRACT (relied on beyond this file): AskSS observes without acting. While it is on
-    /// the stack, nothing is equipped, dropped, forgotten, or remembered — SS's preference
-    /// tree is halted at the exact decision point and its answer extracted. Any change that
-    /// lets a side effect escape the dry run breaks every caller that treats "ask SS" as a
-    /// pure question, and the suite's arbitration phases with it.
-    ///
-    /// Composition note: halting via a false-returning prefix also skips any
-    /// later-registered prefix on equipSpecificWeapon (Harmony semantics), so the dry run
-    /// reflects SS as patched by everything that loaded BEFORE this mod. Consumers loading
-    /// after must not rely on their own equipSpecificWeapon prefixes firing during
-    /// arbitration — their filters on the picker functions (which run inside the dry run)
-    /// are the composing surface.
+    /// Intercepts SS's equipSpecificWeapon to check whether a gun is equippable per SS rules.
     /// </summary>
     [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipSpecificWeapon),
                   new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) })]
@@ -181,11 +124,7 @@ namespace CESimpleSidearmsCompat.Patches
         private static ThingWithComps answer;
         private static bool answered;
 
-        /// <summary>Whether the halting prefix below actually installed. AskSS refuses
-        /// to ask without it: the two halves of this seam fail INDEPENDENTLY (separate
-        /// Prepare guards), and asking with no blocker in place would run SS's
-        /// preference tree FOR REAL inside CE's weapon search — real equips, possible
-        /// fumble-drops — instead of a hypothetical (T3-8).</summary>
+        /// <summary>Whether the halting prefix below actually installed.</summary>
         private static bool installed;
 
         public static bool Prepare()
@@ -198,10 +137,11 @@ namespace CESimpleSidearmsCompat.Patches
         }
 
         /// <summary>
-        /// The weapon SS would equip right now. <paramref name="decided"/> separates SS's two
-        /// kinds of silence: false means it never reached an equip at all (no opinion), true
-        /// with a null return means it deliberately chose to leave the pawn unarmed. Nothing
-        /// is equipped, dropped, or remembered.
+        /// The weapon SS would equip right now.
+        ///
+        /// <paramref name="decided"/> separates SS's two silent modes:
+        /// false means it never reached an equip at all (no opinion),
+        /// true with a null return means it deliberately chose to leave the pawn unarmed.
         /// </summary>
         public static ThingWithComps AskSS(Pawn pawn, out bool decided)
         {

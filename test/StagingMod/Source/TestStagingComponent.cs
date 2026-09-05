@@ -71,7 +71,7 @@ namespace CESSCompatTestStaging
 
         // ---- scenarios -----------------------------------------------------
 
-        // Axes 1 + 10: bulk-capped pawn, heavy vs light sidearm on ground; CE
+        // Sidearm capacity + hold sync: bulk-capped pawn, heavy vs light sidearm on ground; CE
         // loadout that excludes a remembered sidearm.
         private void Stage1_Pickup(Map map)
         {
@@ -93,7 +93,7 @@ namespace CESSCompatTestStaging
             pawn.SetLoadout(loadout);
         }
 
-        // Axes 2, 3, 9, 11: loaded rifle + loaded pistol + empty SMG (no spare
+        // Ranged DPS, ammo-aware selection, switch arbitration, classification: loaded rifle + loaded pistol + empty SMG (no spare
         // 9mm), hostiles at range, EMP grenades, one mechanoid.
         private void Stage2_Selection(Map map)
         {
@@ -109,13 +109,13 @@ namespace CESSCompatTestStaging
             {
                 dryAmmo.CurMagCount = 0; // deliberately dry, and no spare .44 given
             }
-            GiveSidearm(pawn, "Weapon_GrenadeEMP", loaded: false); // axis 11 probe
+            GiveSidearm(pawn, "Weapon_GrenadeEMP", loaded: false); // ammo-classification probe
 
             SpawnHostiles(map, pawn.Position, count: 3, distance: 30);
             SpawnMechanoid(map, pawn.Position, distance: 35);
         }
 
-        // Axes 5, 6, 7: CQC melee draw, warmup swap, reload protection.
+        // Combat flow: CQC melee draw, warmup swap, reload protection.
         private void Stage3_CombatFlow(Map map)
         {
             Pawn brawlBait = SpawnColonist(map, "Fency", offset: new IntVec3(4, 0, 0));
@@ -139,14 +139,14 @@ namespace CESSCompatTestStaging
             }
         }
 
-        // Axes 4 + 8: SS-generated raider sidearms (loaded + spare ammo via P04),
-        // one-use launcher re-equip.
+        // NPC sidearm ammo + one-use re-equip: SS-generated raider sidearms
+        // (loaded + spare ammo via the NPC-sidearm-ammo patch), one-use launcher re-equip.
         private void Stage4_Generation(Map map)
         {
             List<Pawn> raiders = SpawnHostiles(map, anchor, count: 5, distance: 25);
             // Natural generation is chance-rolled and budget-capped, so ranged sidearms
             // are a coin flip; force the SS generator until each raider has one. The
-            // compat patch's ammo provisioning (P04) fires on every generator call.
+            // compat patch's ammo provisioning (the NPC-sidearm-ammo patch) fires on every generator call.
             foreach (Pawn raider in raiders)
             {
                 ForceRangedSidearm(raider);
@@ -165,7 +165,7 @@ namespace CESSCompatTestStaging
 
         /// <summary>
         /// Runs SS's own sidearm generator (chance forced to 1, full budget) until the
-        /// pawn carries a ranged CE-ammo-using sidearm, so axis-4 ammo provisioning has
+        /// pawn carries a ranged CE-ammo-using sidearm, so the NPC-sidearm-ammo patch has
         /// something deterministic to act on. Weapon pick stays weighted-random.
         /// </summary>
         public static bool ForceRangedSidearm(Pawn pawn)

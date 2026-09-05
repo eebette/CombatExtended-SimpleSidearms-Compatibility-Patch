@@ -18,13 +18,7 @@ namespace CESimpleSidearmsCompat
             && ModsConfig.IsActive("PeteTimesSix.SimpleSidearms");
 
         /// <summary>
-        /// Applies the patch classes one at a time so a single broken patch target — the
-        /// expected failure mode when CE or Simple Sidearms updates — costs only that one
-        /// fix instead of the whole layer. Nothing is allowed to escape: this runs inside
-        /// CE's compatibility long event, which does NOT guard the patches it invokes, so
-        /// an exception here would take down every other mod's CE compat patches too.
-        /// Matches CE's own convention: missing target degrades with a named error, never
-        /// throws.
+        /// Applies the patch classes one at a time. Matches CE's own convention.
         /// </summary>
         public static void EnsurePatched()
         {

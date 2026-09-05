@@ -145,7 +145,7 @@ namespace CESSCompatTestStaging
             results.Add($"  \"timedIterations\": {TimedIterations}");
             results.Add($"  \"rounds\": {Rounds}");
 
-            // The call SS makes once per tick per warming-up pawn (axis 7 -> SS's
+            // The call SS makes once per tick per warming-up pawn (warmup auto-switch -> SS's
             // trySwapToMoreAccurateRangedWeapon -> findBestRangedWeapon).
             Func<int> selection = () =>
             {

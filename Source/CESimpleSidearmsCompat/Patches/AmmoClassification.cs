@@ -9,9 +9,7 @@ using Verse;
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 11: SS classifies weapons as EMP/dangerous from the verb's default projectile;
-    /// under CE the actual projectile comes from the loaded ammo. Re-evaluate using the
-    /// current CE projectile when the weapon has an ammo comp.
+    /// Re-evaluate SS's EMP/dangerous classification using the current CE projectile when the weapon has an ammo comp.
     /// </summary>
     [HarmonyPatch(typeof(GettersFilters), nameof(GettersFilters.isEMPWeapon),
                   new[] { typeof(ThingWithComps) })]

@@ -10,14 +10,7 @@ using Verse.AI;
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 5: SS's automatic weapon swapping can fire mid CE reload, cancelling the reload
-    /// job and wasting the attempt. Idle/optimisation preference swaps are suppressed during
-    /// a reload; explicit/specific swaps end the reload cleanly first.
-    ///
-    /// Swaps the pawn did not choose the timing of are NOT suppressed. SS routes its
-    /// close-quarters response through the same method (doCQC → tryCQCWeaponSwapToMelee),
-    /// and reads a false return as "no weapon drawn" — which also skips the retaliation
-    /// job, so blanket suppression left a reloading pawn standing there being stabbed.
+    /// Suppresses idle/optimisation preference weapon swaps during CE reload.
     /// </summary>
     [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipBestWeaponFromInventoryByPreference),
                   new[] { typeof(Pawn), typeof(DroppingModeEnum), typeof(PrimaryWeaponMode?), typeof(Pawn) })]
@@ -53,20 +46,12 @@ namespace CESimpleSidearmsCompat.Patches
             // Melee override: doCQC (attacked in melee) and chooseOptimalMeleeForAttack
             // (ordered to melee). UsedUp: the weapon is already gone, so there is no
             // reload worth protecting. Everything else waits for the reload to finish.
-            // (Name-resolved values — see SSEnums.)
             return modeOverride == SSEnums.Melee || dropMode == SSEnums.UsedUp;
         }
     }
 
     /// <summary>
-    /// The explicit-switch half: a specific equip during a CE reload ends the reload
-    /// cleanly first, so the swap does not leave a reload job driving a gun that is no
-    /// longer in hand. Found via the Loadouts module's reviews and fixed here where the
-    /// guard lives: the old prefix ended the reload for EVERY call — including ones SS was
-    /// about to refuse (already-equipped no-ops, its equip-time blocked-weapon check) — so
-    /// a refused switch silently cost the pawn their reload. The no-op case is skipped up
-    /// front; every deeper refusal is repaired after the fact by restarting the reload the
-    /// prefix ended.
+    /// Cleanly ends a specific equip during a CE reload.
     /// </summary>
     [HarmonyPatch(typeof(WeaponAssingment), nameof(WeaponAssingment.equipSpecificWeapon),
                   new[] { typeof(Pawn), typeof(ThingWithComps), typeof(bool), typeof(bool) })]
@@ -101,23 +86,14 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
-            // The gun the job is actually feeding is its TargetB — CE issues ReloadWeapon
-            // jobs for INVENTORY guns too (gear-tab reload, JobGiver_CheckReload top-offs).
-            // Those are deliberately left alone, but NOT because they coexist with
-            // equips: CE's reload driver fails the job on ANY primary change
-            // (JobDriver_Reload.HasNoGunOrAmmo's initEquipment clause), backpack
-            // reloads included (T3-9). A swap mid-top-off kills the job with the
-            // rounds already unloaded to inventory at issuance — acceptable, because
-            // nothing is lost and the top-off re-issues on the next think pass. What
-            // this guard protects is only the equipped-primary reload, where a swap
-            // means the pawn is left holding a different gun than the one half-fed.
+            // Protects against a swap during a reload of the equipped-primary,
+            // leaving the pawn holding a different gun than the one half-fed.
             var reloading = pawn.CurJob?.targetB.Thing as ThingWithComps;
             if (reloading == null || reloading != pawn.equipment?.Primary)
             {
                 return;
             }
-            // Equipping the already-equipped weapon is a no-op SS refuses immediately —
-            // nothing is about to conflict with the reload, so keep it running.
+            // Don't try to equip the already-equipped weapon.
             if (weapon != null && weapon == reloading)
             {
                 return;
@@ -156,9 +132,7 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
-            // SS refused after the prefix ran (blocked weapon, invalid carrier): the pawn
-            // still holds the half-reloaded gun and lost the job for nothing. Restart the
-            // reload of THAT gun, not whatever is in hand now.
+            // SS refused after the prefix ran: restart the reload.
             CompAmmoUser ammoUser = gun?.TryGetComp<CompAmmoUser>();
             Verse.AI.Job reload = ammoUser?.TryMakeReloadJob();
             if (reload != null && pawn.jobs != null && pawn.CurJob == null)
@@ -167,10 +141,6 @@ namespace CESimpleSidearmsCompat.Patches
             }
         }
 
-        // A finalizer, not just the postfix: postfixes do not run when the original (or a
-        // later prefix) throws, and a stranded flag both loses the repair and arms a
-        // spurious reload on an unrelated later call for the same pawn. Same reasoning as
-        // the retrieval scope bracket in P01.
         [HarmonyFinalizer]
         public static void Finalizer(Pawn pawn)
         {

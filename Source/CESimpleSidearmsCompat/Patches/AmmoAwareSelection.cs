@@ -9,12 +9,7 @@ using Verse;
 namespace CESimpleSidearmsCompat.Patches
 {
     /// <summary>
-    /// Axis 3: SS's best-ranged-weapon selection is ammo-blind and can hand a pawn an empty
-    /// gun. If the original pick has no usable ammo, ask SS the same question again with the
-    /// dry weapons hidden — so SS's own filter chain picks the replacement, including the
-    /// third-party rules it applies for other mods (VFE off-hand shields, Tacticowl
-    /// dual-wield) and whatever it adds next. Re-deriving that chain here meant re-deriving
-    /// it wrong: it silently missed both of those.
+    /// Patch SS's weapon selection to honor ammo supply.
     /// </summary>
     [HarmonyPatch(typeof(GettersFilters), nameof(GettersFilters.findBestRangedWeapon),
                   new[] { typeof(Pawn), typeof(LocalTargetInfo?), typeof(bool), typeof(bool), typeof(bool), typeof(bool) })]
@@ -68,15 +63,7 @@ namespace CESimpleSidearmsCompat.Patches
     }
 
     /// <summary>
-    /// The one seam the re-run needs: while it is in flight, the pawn's carried-weapon list
-    /// does not include guns with no usable ammo.
-    ///
-    /// Interplay note: sibling modules hang their own postfixes on GetCarriedWeapons (the
-    /// Loadouts module hides excluded pairs during its picker brackets the same way). The
-    /// filters compose — each RemoveAll acts on whatever list it receives, each is scoped
-    /// by its own guard, and none re-adds — so their relative Harmony order does not
-    /// matter. Keep it that way: a postfix here must only ever REMOVE entries under a
-    /// scope of its own.
+    /// Hides the pawn's ammo-less guns from GetCarriedWeapons while the ammo-aware re-run runs.
     /// </summary>
     [HarmonyPatch(typeof(Extensions), nameof(Extensions.GetCarriedWeapons),
                   new[] { typeof(Pawn), typeof(bool), typeof(bool) })]
