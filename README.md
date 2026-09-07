@@ -7,10 +7,11 @@
 RimWorld compatibility mod making [Combat Extended](https://github.com/CombatExtended-Continued/CombatExtended)
 and [Simple Sidearms](https://github.com/PeteTimesSix/SimpleSidearms) work together.
 
-See [My other mods](#my-other-mods) for additional modules to create a cohesive game experience while using both mods.
+See [My other mods](#my-other-mods) for additional modules to create a cohesive game experience while using both CE and
+SS together.
 
 Inspired by the [discontinued mod by Ghosty](https://steamcommunity.com/sharedfiles/filedetails/?id=3694067502), I
-decompiled that mod and searched *even harder* for incompatibilities between the mods.
+decompiled that mod and searched *even harder* for incompatibilities to patch.
 
 ## Fixes
 
@@ -35,8 +36,8 @@ decompiled that mod and searched *even harder* for incompatibilities between the
 
 ### The CE + Simple Sidearms suite
 
-Two optional modules sit on top of this patch and require it. This patch only repairs what the two mods break in each
-other; anything opinionated lives in one of these instead.
+Two optional modules sit on top of this patch and require it. This patch only fixes core incompatibilities; enhancements
+in these instead.
 
 | Module                                                                                                                                          | What it does                                                         |
 |-------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------|
@@ -45,12 +46,10 @@ other; anything opinionated lives in one of these instead.
 
 ### Standalone
 
-None of these need this patch, or each other.
-
 | Mod                                                                                                                                     | What it does                                                                                                                    |
 |-----------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
 | [![Better Attack Orders for Simple Sidearms](Media/Badge_BAO.png)](https://github.com/eebette/Better-Attack-Orders-for-Simple-Sidearms) | Adds sidearm attack orders to the right-click target menu.                                                                      |
-| [![Loadout Quality for Combat Extended](Media/Badge_LQ.png)](https://github.com/eebette/Loadout-Quality-for-Combat-Extended)            | Automatically upgrades a pawn's held guns when a higher-quality copy is available.                                              |
+| [![Loadout Quality for Combat Extended](Media/Badge_LQ.png)](https://github.com/eebette/Loadout-Quality-for-Combat-Extended)            | Pawns will upgrade their held guns when a higher-quality copy is available.                                                     |
 | [![Universal Patch for More Materials](Media/Badge_UPMM.png)](https://github.com/eebette/Universal-Patch-for-More-Materials)            | Adds materials from [More Materials](https://steamcommunity.com/sharedfiles/filedetails/?id=3055040889) to non-vanilla recipes. |
 
 ## FAQ
@@ -61,8 +60,7 @@ I'm not answering that.
 
 **Can I add or remove it mid-save?**
 
-Both are safe. It writes nothing of its own to a save - no settings, no records, no scribed data. Remove it and you are
-left with plain CE and plain Simple Sidearms.
+Yep.
 
 **Does it change balance?**
 
@@ -82,7 +80,7 @@ synchronization between the CE Loadout and SS inventory.
 This mod was engineered with the help of an AI Coding Assistant (Claude Code, Fable 5, Max effort). The amount of
 researching and deep-diving the compatibility interfaces of both mods would have been insurmountable without it.
 
-Development followed a standard process driven and scrutinized by a human (me, the person writing this):
+Development followed a standard process driven and scrutinized by me (the real human person writing this):
 explore, design, build, test, fix, review, scrutinize, test again over many rounds.
 
 I have manually reviewed and verified all code in this mod.
@@ -105,9 +103,7 @@ The build references the workshop DLLs at
 uses [Krafs.Publicizer](https://github.com/krafs/Publicizer) for access to internal members of both mods. Output lands
 in `Assemblies/`.
 
-**No CI**: the compile references live in local Steam Workshop folders and can't be vendored (CE is CC BY-NC-SA, Simple
-Sidearms has no license), so releases are manual local builds with the built DLL committed in `Assemblies/` - cloning
-the repo yields a working mod without a toolchain. Full process: [RELEASING.md](RELEASING.md).
+> 🔗 [RELEASING.md](RELEASING.md)
 
 ## Installing locally
 
