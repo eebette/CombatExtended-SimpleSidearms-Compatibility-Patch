@@ -1,12 +1,14 @@
-[url=https://steamcommunity.com/sharedfiles/filedetails/?id=2890901044][img]https://raw.githubusercontent.com/CombatExtended-Continued/CombatExtended/master/Media/Badge_CE_compatible.png[/img][/url] [img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/master/Media/Badge_Suite.png[/img] [img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/master/Media/Badge_Patch.png[/img]
+[url=https://steamcommunity.com/sharedfiles/filedetails/?id=2890901044][img]https://raw.githubusercontent.com/CombatExtended-Continued/CombatExtended/master/Media/Badge_CE_compatible.png[/img][/url] [img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_Suite.png[/img] [img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_Patch.png[/img]
 
-[i][DEMO GIF SLOT — CQC melee draw / warmup swap clip goes here at publish][/i]
+RimWorld compatibility mod making [url=https://github.com/CombatExtended-Continued/CombatExtended]Combat Extended[/url] and [url=https://github.com/PeteTimesSix/SimpleSidearms]Simple Sidearms[/url] work together.
 
-Makes [b]Combat Extended[/b] and [b]Simple Sidearms[/b] actually work together. Both mods ship zero knowledge of each other; this patch repairs every seam found by cross-reading both codebases — repair only, no new behavior, both mods work as their authors intended.
+See [b]My other mods[/b] below for additional modules to create a cohesive game experience while using both CE and SS together.
 
-[h1]What it fixes[/h1]
+Inspired by the [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3694067502]discontinued mod by Ghosty[/url], I decompiled that mod and searched [i]even harder[/i] for incompatibilities to patch.
+
+[h1]Fixes[/h1]
 [list]
-[*]Sidearm carry limits now respect CE's inventory system (weight [i]and[/i] bulk) - including the weapons Simple Sidearms goes and fetches by itself.
+[*]Sidearm carry limits now respect CE's inventory system (weight [i]and[/i] bulk).
 [*]Weapon ranking uses real CE damage numbers, so pawns actually pick the better gun.
 [*]Pawns never auto-switch to a gun that has no ammo.
 [*]Enemies spawn with their sidearms loaded and carrying spare ammo.
@@ -14,37 +16,55 @@ Makes [b]Combat Extended[/b] and [b]Simple Sidearms[/b] actually work together. 
 [*]Drawing a melee sidearm when attacked in melee works again.
 [*]Mid-fight auto-switching to a better-suited gun works again.
 [*]Firing a single-use launcher leaves the pawn holding their preferred backup, not fists.
-[*]When a gun runs dry or is destroyed, the replacement follows your sidearm preferences instead of CE's guess.
+[*]When a weapon is destroyed or used up, the replacement follows your sidearm preferences instead of CE's guess.
 [*]CE loadout enforcement no longer strips remembered sidearms out of inventories.
 [*]EMP and incendiary weapon detection matches the ammo actually loaded.
+[*]Melee ranking now accounts for CE armor penetration.
 [/list]
-
-Technical details per fix: see the [url=https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch]GitHub README[/url] ("What it fixes (for nerds)").
 
 [h1]Load order[/h1]
-Harmony → Combat Extended → Simple Sidearms → this mod (declared in About.xml; the game sorts it for you).
-
-[h1]Good to know[/h1]
-[list]
-[*]Safe to add or remove mid-save.
-[*]SS-remembered weapons are exempt from CE loadout drops by design — SS memory is explicit player intent. Forget the sidearm to let CE drop it.
-[*][b]Melee Animation[/b]: animated execution kills bypass the melee-attack hook, so the CQC auto-draw doesn't trigger during those — everything else works.
-[*]On a fresh Simple Sidearms install its "Basic" settings preset auto-applies; the patch works with any preset.
-[/list]
+Harmony → Combat Extended → Simple Sidearms → this mod.
 
 [h1]My other mods[/h1]
-[b]The CE + Simple Sidearms suite[/b] — two optional modules that require this patch. This patch only repairs what the two mods break in each other; anything that would change how they behave lives out here.
-[list]
-[*][b]Compatibility Module - Loadouts[/b] — CE loadouts and SS memory as one idea: loadout weapons remembered as sidearms, roles by list order, ammo kept stocked. For you if you manage kit through CE loadouts and keep teaching new recruits their sidearms by hand.
-[*][b]Compatibility Module - Tactics[/b] — better triggers for WHEN a pawn changes weapon: don't abandon a reload, break DPS ties on carried ammo, draw a melee weapon that can hurt what's in front of you. For you if your pawns pick sensible weapons at senseless moments.
-[/list]
-[b]Standalone[/b] — neither needs this patch, or each other.
-[list]
-[*][b]Better Attack Orders for Simple Sidearms[/b] — Simple Sidearms only, no CE. Attack orders consider every gun the pawn carries, instead of only the one in hand.
-[*][b]Loadout Quality for Combat Extended[/b] — CE only, no Simple Sidearms. Per-loadout quality and durability floors, plus self-upgrading when a better copy turns up.
-[*][b]Universal Patch for More Materials[/b] — no weapons involved. More Materials adds copper, tin and nickel to vanilla recipes only; this derives the rules behind those choices and applies them to every content mod you have, including ones released after it.
-[/list]
+[b]The CE + Simple Sidearms suite[/b] — two optional modules that sit on top of this patch and require it. This patch only fixes core incompatibilities; enhancements live in these instead.
+[table]
+[tr][th]Module[/th][th]What it does[/th][/tr]
+[tr][td][url=https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Loadouts][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_Loadouts.png[/img][/url][/td][td]Synchronizes CE Loadouts with SS memory/gizmo.[/td][/tr]
+[tr][td][url=https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Tactics][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_Tactics.png[/img][/url][/td][td]Sensible tweaks to nonsense pawn behavior when CE + SS run together.[/td][/tr]
+[/table]
 
-[h1]Links & credit[/h1]
-Source, issues, technical docs: [url=https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch]GitHub[/url]. Code MIT-licensed; badge art stays under CE's CC BY-NC-SA (see NOTICE).
-All credit for the two great mods this bridges: the CE team and PeteTimesSix. The CE-compatible badge and emblem art derive from CE's own media (CC BY-NC-SA).
+[b]Standalone[/b] — none of these need this patch, or each other.
+[table]
+[tr][th]Mod[/th][th]What it does[/th][/tr]
+[tr][td][url=https://github.com/eebette/Better-Attack-Orders-for-Simple-Sidearms][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_BAO.png[/img][/url][/td][td]Adds sidearm attack orders to the right-click target menu.[/td][/tr]
+[tr][td][url=https://github.com/eebette/Loadout-Quality-for-Combat-Extended][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_LQ.png[/img][/url][/td][td]Pawns upgrade their held guns when a higher-quality copy is available.[/td][/tr]
+[tr][td][url=https://github.com/eebette/Universal-Patch-for-More-Materials][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_UPMM.png[/img][/url][/td][td]Adds materials from [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3055040889]More Materials[/url] to non-vanilla recipes.[/td][/tr]
+[/table]
+
+[h1]FAQ[/h1]
+[b]CE compatible?[/b]
+I'm not answering that.
+
+[b]Can I add or remove it mid-save?[/b]
+Yep.
+
+[b]Does it change balance?[/b]
+It makes the game easier in the sense that 2 core combat mods are no longer broken in your save. But in the traditional sense, no.
+
+[b]Why is my pawn keeping a sidearm that isn't in its CE loadout?[/b]
+Pawns won't automatically drop any weapon Simple Sidearms remembers. Forget it in the SS gizmo to let CE drop it. Use the [url=https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Loadouts]Loadouts module[/url] for synchronization between the CE Loadout and SS inventory.
+
+[b]AI?[/b]
+This mod was engineered with the help of an AI Coding Assistant (Claude Code, Fable 5, Max effort). The amount of researching and deep-diving the compatibility interfaces of both mods would have been insurmountable without it.
+
+Development followed a standard process driven and scrutinized by me (the real human person writing this): explore, design, build, test, fix, review, scrutinize, test again over many rounds.
+
+I have manually reviewed and verified all code in this mod.
+
+I ask that if you have unconstructive feedback regarding the usage of AI while developing this mod, that it remains outside of this community space. Thank you.
+
+[h1]Credit[/h1]
+[list]
+[*]Thanks of course to PeteTimesSix and the CE team.
+[*]Thanks to Ghosty for the initial research put in to find incompatibilities between the 2 mods.
+[/list]

@@ -6,20 +6,76 @@
     <supportedVersions>
         <li>1.6</li>
     </supportedVersions>
-    <description>Makes Combat Extended and Simple Sidearms play nicely together.
+    <description>[url=https://steamcommunity.com/sharedfiles/filedetails/?id=2890901044][img]https://raw.githubusercontent.com/CombatExtended-Continued/CombatExtended/master/Media/Badge_CE_compatible.png[/img][/url] [img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_Suite.png[/img] [img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_Patch.png[/img]
 
-Covers:
-- Sidearm pickup limits respect CE bulk (not just weight), including the weapons Simple Sidearms fetches on its own
-- Weapon scoring uses CE stats (magazine, reload time, ammo damage)
-- Pawns never auto-switch to guns with no ammo
-- NPC-generated sidearms spawn loaded, with spare ammo in inventory
-- Simple Sidearms no longer interrupts CE reload jobs
-- CQC melee auto-switch works with CE melee verbs
-- Mid-combat ranged auto-switch works with CE shoot verbs
-- One-use weapon (single-shot launcher) re-equip follows Simple Sidearms preferences
-- CE's replacement-weapon switching (destroyed, used up, thrown) respects Simple Sidearms preferences
-- CE loadouts no longer drop remembered sidearms (synced to CE hold-tracking)
-- EMP/dangerous weapon detection reads the loaded CE ammo type</description>
+RimWorld compatibility mod making [url=https://github.com/CombatExtended-Continued/CombatExtended]Combat Extended[/url] and [url=https://github.com/PeteTimesSix/SimpleSidearms]Simple Sidearms[/url] work together.
+
+See [b]My other mods[/b] below for additional modules to create a cohesive game experience while using both CE and SS together.
+
+Inspired by the [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3694067502]discontinued mod by Ghosty[/url], I decompiled that mod and searched [i]even harder[/i] for incompatibilities to patch.
+
+[h1]Fixes[/h1]
+[list]
+[*]Sidearm carry limits now respect CE's inventory system (weight [i]and[/i] bulk).
+[*]Weapon ranking uses real CE damage numbers, so pawns actually pick the better gun.
+[*]Pawns never auto-switch to a gun that has no ammo.
+[*]Enemies spawn with their sidearms loaded and carrying spare ammo.
+[*]Switching weapons no longer interrupts a reload partway through.
+[*]Drawing a melee sidearm when attacked in melee works again.
+[*]Mid-fight auto-switching to a better-suited gun works again.
+[*]Firing a single-use launcher leaves the pawn holding their preferred backup, not fists.
+[*]When a weapon is destroyed or used up, the replacement follows your sidearm preferences instead of CE's guess.
+[*]CE loadout enforcement no longer strips remembered sidearms out of inventories.
+[*]EMP and incendiary weapon detection matches the ammo actually loaded.
+[*]Melee ranking now accounts for CE armor penetration.
+[/list]
+
+[h1]Load order[/h1]
+Harmony → Combat Extended → Simple Sidearms → this mod.
+
+[h1]My other mods[/h1]
+[b]The CE + Simple Sidearms suite[/b] — two optional modules that sit on top of this patch and require it. This patch only fixes core incompatibilities; enhancements live in these instead.
+[table]
+[tr][th]Module[/th][th]What it does[/th][/tr]
+[tr][td][url=https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Loadouts][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_Loadouts.png[/img][/url][/td][td]Synchronizes CE Loadouts with SS memory/gizmo.[/td][/tr]
+[tr][td][url=https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Tactics][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_Tactics.png[/img][/url][/td][td]Sensible tweaks to nonsense pawn behavior when CE + SS run together.[/td][/tr]
+[/table]
+
+[b]Standalone[/b] — none of these need this patch, or each other.
+[table]
+[tr][th]Mod[/th][th]What it does[/th][/tr]
+[tr][td][url=https://github.com/eebette/Better-Attack-Orders-for-Simple-Sidearms][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_BAO.png[/img][/url][/td][td]Adds sidearm attack orders to the right-click target menu.[/td][/tr]
+[tr][td][url=https://github.com/eebette/Loadout-Quality-for-Combat-Extended][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_LQ.png[/img][/url][/td][td]Pawns upgrade their held guns when a higher-quality copy is available.[/td][/tr]
+[tr][td][url=https://github.com/eebette/Universal-Patch-for-More-Materials][img]https://raw.githubusercontent.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/main/Media/Badge_UPMM.png[/img][/url][/td][td]Adds materials from [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3055040889]More Materials[/url] to non-vanilla recipes.[/td][/tr]
+[/table]
+
+[h1]FAQ[/h1]
+[b]CE compatible?[/b]
+I'm not answering that.
+
+[b]Can I add or remove it mid-save?[/b]
+Yep.
+
+[b]Does it change balance?[/b]
+It makes the game easier in the sense that 2 core combat mods are no longer broken in your save. But in the traditional sense, no.
+
+[b]Why is my pawn keeping a sidearm that isn't in its CE loadout?[/b]
+Pawns won't automatically drop any weapon Simple Sidearms remembers. Forget it in the SS gizmo to let CE drop it. Use the [url=https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Loadouts]Loadouts module[/url] for synchronization between the CE Loadout and SS inventory.
+
+[b]AI?[/b]
+This mod was engineered with the help of an AI Coding Assistant (Claude Code, Fable 5, Max effort). The amount of researching and deep-diving the compatibility interfaces of both mods would have been insurmountable without it.
+
+Development followed a standard process driven and scrutinized by me (the real human person writing this): explore, design, build, test, fix, review, scrutinize, test again over many rounds.
+
+I have manually reviewed and verified all code in this mod.
+
+I ask that if you have unconstructive feedback regarding the usage of AI while developing this mod, that it remains outside of this community space. Thank you.
+
+[h1]Credit[/h1]
+[list]
+[*]Thanks of course to PeteTimesSix and the CE team.
+[*]Thanks to Ghosty for the initial research put in to find incompatibilities between the 2 mods.
+[/list]</description>
     <modDependencies>
         <li>
             <packageId>brrainz.harmony</packageId>
