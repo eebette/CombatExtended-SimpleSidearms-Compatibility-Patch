@@ -78,7 +78,8 @@ synchronization between the CE Loadout and SS inventory.
 **AI?**
 
 This mod was engineered with the help of an AI Coding Assistant (Claude Code, Fable 5, Max effort). The amount of
-researching and deep-diving the compatibility interfaces of both mods would have been insurmountable without it.
+researching and deep-diving the compatibility interfaces of mods that it patches would have been insurmountable without
+it.
 
 Development followed a standard process driven and scrutinized by me (the real human person writing this):
 explore, design, build, test, fix, review, scrutinize, test again over many rounds.
