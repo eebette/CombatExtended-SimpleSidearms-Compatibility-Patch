@@ -52,7 +52,7 @@ namespace CESimpleSidearmsCompat.Patches
             // them.
             //
             // Use loadout.Slots, not GetSlotsFor(): on an "Ad Hoc" loadout GetSlotsFor() calls this
-            // method, which calls GetSlotsFor() again — an endless loop that hard-crashed the game
+            // method, which calls GetSlotsFor() again - an endless loop that hard-crashed the game
             // when the "Ad Hoc" box was ticked.
             List<HoldRecord> holdRecords = LoadoutManager.GetHoldRecords(pawn);
             Dictionary<ThingDef, int> rowCounts = null;

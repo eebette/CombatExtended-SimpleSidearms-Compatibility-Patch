@@ -5,13 +5,13 @@ using Verse;
 namespace CESimpleSidearmsCompat
 {
     /// <summary>
-    /// Failure doctrine for every patch class here — so a broken assumption turns a feature off,
+    /// Failure doctrine for every patch class here - so a broken assumption turns a feature off,
     /// never crashes:
     ///
-    /// 1. Attribute pins — an exact target signature; a moved/renamed target won't bind.
-    /// 2. Prepare guards (Require/RequireType) — confirm the target + depended-on types exist,
+    /// 1. Attribute pins - an exact target signature; a moved/renamed target won't bind.
+    /// 2. Prepare guards (Require/RequireType) - confirm the target + depended-on types exist,
     ///    else log the gameplay consequence and skip the class.
-    /// 3. Thin-outer/NoInlining-inner split — the outer try/catch keeps a throw out of the game
+    /// 3. Thin-outer/NoInlining-inner split - the outer try/catch keeps a throw out of the game
     ///    (Log.ErrorOnce) and falls back to upstream behavior.
     /// </summary>
     internal static class PatchGuard
@@ -27,7 +27,7 @@ namespace CESimpleSidearmsCompat
             {
                 return true;
             }
-            Log.Error($"{LogPrefix}{type.Name}.{method} not found — {consequence} "
+            Log.Error($"{LogPrefix}{type.Name}.{method} not found - {consequence} "
                       + "The mod that declares it probably moved it.");
             return false;
         }
@@ -39,7 +39,7 @@ namespace CESimpleSidearmsCompat
             {
                 return true;
             }
-            Log.Error($"{LogPrefix}{fullName} not found — {consequence} "
+            Log.Error($"{LogPrefix}{fullName} not found - {consequence} "
                       + "The mod that declares it probably moved it.");
             return false;
         }
@@ -48,15 +48,15 @@ namespace CESimpleSidearmsCompat
     /// <summary>
     /// Hashes an upstream method's IL so a shape change we depend on beyond what our anchors see
     /// (a reshaped body a transpiler would mis-edit) becomes a loud re-verify error at load, not
-    /// silent wrong behavior. To bake a hash: set it to "" — Verify then logs the computed value
-    /// ("bake me") — run once, paste it in.
+    /// silent wrong behavior. To bake a hash: set it to "" - Verify then logs the computed value
+    /// ("bake me") - run once, paste it in.
     /// </summary>
     internal static class UpstreamFingerprint
     {
-        // Baked against SS v1.6 — re-harvest on upstream updates.
+        // Baked against SS v1.6 - re-harvest on upstream updates.
         internal const string StanceTickHash = "93dde9eafa5069a4";
 
-        // Baked against SS v1.6 — re-harvest on upstream updates.
+        // Baked against SS v1.6 - re-harvest on upstream updates.
         internal const string MeleeDpsBiasedHash = "9eb4ccaa82b9c104";
 
         internal static void Verify(Type type, string method, string expected, string protects)
@@ -66,7 +66,7 @@ namespace CESimpleSidearmsCompat
                 var mb = AccessTools.Method(type, method);
                 if (mb == null)
                 {
-                    Log.Error($"{PatchGuard.LogPrefix}{type.Name}.{method} not found — {protects} "
+                    Log.Error($"{PatchGuard.LogPrefix}{type.Name}.{method} not found - {protects} "
                               + "cannot be verified against upstream.");
                     return;
                 }
@@ -92,7 +92,7 @@ namespace CESimpleSidearmsCompat
                 if (computed != expected)
                 {
                     Log.Error($"{PatchGuard.LogPrefix}{type.Name}.{method} changed shape upstream "
-                              + $"(fingerprint {computed}, expected {expected}) — re-verify {protects}.");
+                              + $"(fingerprint {computed}, expected {expected}) - re-verify {protects}.");
                 }
             }
             catch (Exception e)
@@ -126,7 +126,7 @@ namespace CESimpleSidearmsCompat
                 return true;
             }
             Log.Error(PatchGuard.LogPrefix + "A Simple Sidearms enum member could not be resolved "
-                      + $"by name — {consequence}");
+                      + $"by name - {consequence}");
             return false;
         }
 

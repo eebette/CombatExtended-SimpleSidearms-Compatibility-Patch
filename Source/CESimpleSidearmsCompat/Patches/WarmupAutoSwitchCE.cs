@@ -107,7 +107,7 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 // SS reshaped the body; leave it untouched rather than half-transpiled.
                 Log.Error(PatchGuard.LogPrefix + "Simple Sidearms' warmup postfix no longer matches "
-                          + $"(gate found: {gateDone}, window found: {windowDone}) — mid-warmup "
+                          + $"(gate found: {gateDone}, window found: {windowDone}) - mid-warmup "
                           + "switches to a more accurate ranged weapon stay dead under CE.");
                 return instructions;
             }

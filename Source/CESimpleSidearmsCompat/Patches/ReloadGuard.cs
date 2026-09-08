@@ -126,7 +126,7 @@ namespace CESimpleSidearmsCompat.Patches
             ThingWithComps gun = endedReloadGun;
             endedReloadFor = null;
             endedReloadGun = null;
-            // The equip went through — the reload was ended for a reason and the new
+            // The equip went through - the reload was ended for a reason and the new
             // weapon is not the one it was feeding.
             if (__result)
             {

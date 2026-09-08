@@ -52,7 +52,7 @@ namespace CESimpleSidearmsCompat
                     catch (Exception e)
                     {
                         failures.Add(type.Name);
-                        Log.Error($"{LogPrefix}Patch class {type.Name} could not be applied — that one fix is inactive, the others still work. This usually means CE or Simple Sidearms changed a patched member. {e}");
+                        Log.Error($"{LogPrefix}Patch class {type.Name} could not be applied - that one fix is inactive, the others still work. This usually means CE or Simple Sidearms changed a patched member. {e}");
                     }
                 }
             }

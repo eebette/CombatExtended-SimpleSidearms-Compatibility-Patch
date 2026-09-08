@@ -33,14 +33,14 @@ namespace CESimpleSidearmsCompat.Patches
                 }
                 else if (type != typeof(Verb_ShootCEOneUseStatic))
                 {
-                    Log.Warning(PatchGuard.LogPrefix + type.Name + ".SelfConsume not found — pawns "
+                    Log.Warning(PatchGuard.LogPrefix + type.Name + ".SelfConsume not found - pawns "
                                 + "using that verb will stay empty-handed after a one-use weapon. "
                                 + "Combat Extended probably reshaped it.");
                 }
             }
             if (found.Count == 0)
             {
-                Log.Error(PatchGuard.LogPrefix + "No SelfConsume declarations found at all — pawns "
+                Log.Error(PatchGuard.LogPrefix + "No SelfConsume declarations found at all - pawns "
                           + "will stay empty-handed after throwing or consuming one-use CE weapons.");
             }
             return found;

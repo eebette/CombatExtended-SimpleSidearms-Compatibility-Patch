@@ -34,7 +34,7 @@ namespace CESimpleSidearmsCompat.Patches
 
         // Override only SS's inline damage term (its AverageWeighted result, zeroed for CE blade
         // tools) with CE's per-tool damage; SS's formula runs untouched. Anchor: the sole
-        // AverageWeighted call — on any other count, skip and log.
+        // AverageWeighted call - on any other count, skip and log.
         [HarmonyTranspiler]
         public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
         {
@@ -52,7 +52,7 @@ namespace CESimpleSidearmsCompat.Patches
             if (count != 1)
             {
                 Log.Error(PatchGuard.LogPrefix + "getMeleeDPSBiased: expected one AverageWeighted call, found "
-                          + count + " — CE blades keep vanilla's zeroed melee damage. "
+                          + count + " - CE blades keep vanilla's zeroed melee damage. "
                           + "(Simple Sidearms reshaped the method.)");
                 return list;
             }
@@ -146,7 +146,7 @@ namespace CESimpleSidearmsCompat.Patches
                 {
                     continue;
                 }
-                // The tool's damage, averaged over its maneuvers' damage defs — vanilla picks
+                // The tool's damage, averaged over its maneuvers' damage defs - vanilla picks
                 // one at random, so the uniform average is its expected damage.
                 float toolDamage = 0f;
                 int defs = 0;
@@ -165,7 +165,7 @@ namespace CESimpleSidearmsCompat.Patches
                     continue;
                 }
                 toolDamage /= defs;
-                // Vanilla's weight shape, chance × damage² — recomputed, not read via
+                // Vanilla's weight shape, chance × damage² - recomputed, not read via
                 // AdjustedMeleeSelectionWeight, which squares the same zeroed damage. Its constant
                 // commonality factor is dropped: it cancels in the average below.
                 float weight = tool.chanceFactor * toolDamage * toolDamage;

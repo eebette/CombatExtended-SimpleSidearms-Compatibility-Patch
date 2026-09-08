@@ -121,7 +121,7 @@ namespace CESimpleSidearmsCompat.Patches
             }
             Log.Error(PatchGuard.LogPrefix + "Simple Sidearms' retrieval reachability validator was "
                       + (matches == 0 ? "not found" : "ambiguous (" + matches + " candidates)")
-                      + " — auto-retrieval will not be capacity-checked (a pawn may walk for a sidearm "
+                      + " - auto-retrieval will not be capacity-checked (a pawn may walk for a sidearm "
                       + "Combat Extended cannot fit).");
             return false;
         }

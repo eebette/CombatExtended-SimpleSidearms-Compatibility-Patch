@@ -70,7 +70,7 @@ namespace CESimpleSidearmsCompat.Patches
                     __result = false;
                     return false;
                 }
-                return true; // no opinion — CE's own search
+                return true; // no opinion - CE's own search
             }
             if (pick == null)
             {
@@ -147,7 +147,7 @@ namespace CESimpleSidearmsCompat.Patches
         {
             if (!installed)
             {
-                Log.ErrorOnce("[CE+SimpleSidearms] The dry-run blocker is not installed (upstream drift?) — "
+                Log.ErrorOnce("[CE+SimpleSidearms] The dry-run blocker is not installed (upstream drift?) - "
                               + "refusing to ask Simple Sidearms for a preference; Combat Extended's own "
                               + "pick is used.", 0x43455317);
                 decided = false;
@@ -184,7 +184,7 @@ namespace CESimpleSidearmsCompat.Patches
             }
             answer = weapon; // null is a real answer: SS's "go unarmed" branches pass null
             answered = true;
-            __result = true; // "equipped" — stops SS at the branch it decided on
+            __result = true; // "equipped" - stops SS at the branch it decided on
             return false;
         }
     }

@@ -135,7 +135,7 @@ namespace CESimpleSidearmsCompat.Patches
             {
                 return;
             }
-            // Live verb props, matching CEDps and SS's own RangedSpeed — def.Verbs[0] is the
+            // Live verb props, matching CEDps and SS's own RangedSpeed - def.Verbs[0] is the
             // static value and disagrees on weapons CE swaps verbs for (under-barrel launchers).
             float burst = Math.Max(1, weapon.GetComp<CompEquippable>()?.PrimaryVerb?.verbProps?.burstShotCount ?? 1);
             float burstsPerMag = Math.Max(1f, magSize / burst);
@@ -195,19 +195,19 @@ namespace CESimpleSidearmsCompat.Patches
 
         /// <summary>
         /// The chance-to-connect term of the score, asked of CE's own public hit model
-        /// (CE_Math.CalculateHitPercent — the function behind CE's estimated-hit-chance
+        /// (CE_Math.CalculateHitPercent - the function behind CE's estimated-hit-chance
         /// readout) instead of a curve invented here. SS gives this path a distance and
         /// nothing else, so the terms a real shot would bring are this module's own
         /// documented stand-ins:
         ///
-        ///  - the target is a reference human silhouette (0.5 x 1.75 cells) — there is no
+        ///  - the target is a reference human silhouette (0.5 x 1.75 cells) - there is no
         ///    target object to measure;
-        ///  - sway enters as the weapon's SwayFactor read directly as degrees — the
+        ///  - sway enters as the weapon's SwayFactor read directly as degrees - the
         ///    shooter's skill term scales every candidate's sway equally, and this is a
         ///    ranking, not a shot simulation;
         ///  - visibility, target lead and firing angle are identical for every candidate
         ///    and passed as zero (which also makes the projectile-speed and gravity terms
-        ///    inert — they only shape the drop correction that hangs off visibility).
+        ///    inert - they only shape the drop correction that hangs off visibility).
         /// </summary>
         internal static float CEHitFactor(ThingWithComps weapon, CompAmmoUser ammoUser, float distance)
         {
@@ -218,7 +218,7 @@ namespace CESimpleSidearmsCompat.Patches
                 float shotSpeed = Mathf.Max(1f,
                     CompatUtil.CurrentProjectile(weapon, ammoUser)?.projectile?.speed ?? 0f);
                 // offset = the aim height on the target's [0, h] span. CE's own readout
-                // passes size.y / 2 (ShiftVecReport.cs:98 — center of the exposed span);
+                // passes size.y / 2 (ShiftVecReport.cs:98 - center of the exposed span);
                 // 0 means "aim at the feet" and mathematically caps the vertical term at
                 // 0.5 however accurate the gun.
                 return Mathf.Clamp01(CE_Math.CalculateHitPercent(
