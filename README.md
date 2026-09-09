@@ -1,5 +1,8 @@
 # CombatExtended-SimpleSidearms Compatibility Patch
 
+[![Latest Release](https://img.shields.io/github/v/release/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch?label=Latest%20Release)](https://github.com/eebette/CombatExtended-SimpleSidearms-Compatibility-Patch/releases)
+<!-- Steam Workshop badge goes here at publish -->
+
 [![Combat Extended Compatible](Media/Badge_CE_compatible.png)](https://steamcommunity.com/sharedfiles/filedetails/?id=2890901044)
 [![CE + Simple Sidearms Compatibility Suite](Media/Badge_Suite.png)](#my-other-mods)
 ![CE + Simple Sidearms Compatibility Patch](Media/Badge_Patch.png)
