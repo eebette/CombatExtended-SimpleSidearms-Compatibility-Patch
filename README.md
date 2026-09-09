@@ -106,6 +106,21 @@ in `Assemblies/`.
 
 > 🔗 [RELEASING.md](RELEASING.md)
 
+## Testing
+
+Automated in-game acceptance tests, run with Combat Extended, Simple Sidearms, and this patch loaded:
+
+```bash
+./test/run-assert.sh cetest1 CETEST-1-pickup      # capacity gate, sidearm retrieval, loadout hold-sync
+./test/run-assert.sh cetest2 CETEST-2-selection   # CE-damage weapon ranking, ammo-aware selection
+./test/run-assert.sh cetest3 CETEST-3-combat      # mid-fight melee draw, auto-switch, launcher fallback, reload
+./test/run-assert.sh cetest4 CETEST-4-generation  # enemies spawn with loaded sidearms and spare ammo
+```
+
+Each scenario runs a phase model (arrange, mutate, assert, poll) plus a census phase counting patched methods, and
+writes `test/SaveData/test-results-<scenario>.json`. `run-isolated.sh` runs every phase against a fresh save;
+`run-bench.sh` profiles. Details and recorded passes: [`TESTPLAN.md`](TESTPLAN.md).
+
 ## Installing locally
 
 Symlink (or copy) this folder into RimWorld's `Mods` directory:
