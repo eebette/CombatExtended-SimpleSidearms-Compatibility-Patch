@@ -162,16 +162,16 @@ def render_preview(path, subtitle, accent, rifle):
     dd = ImageDraw.Draw(img)
     draw_pistol(dd, (256 - 54) * P, 208 * P, 1.75 * P, flip=True)
 
-    f1 = ImageFont.truetype(FONT, 34 * P)
-    f2 = ImageFont.truetype(FONT, 30 * P)
-    f3 = ImageFont.truetype(FONT, 22 * P)
-    for text, font, y, color in [
-        ("COMBAT EXTENDED", f1, 360 * P, WHITE),
-        ("+ SIMPLE SIDEARMS", f2, 402 * P, WHITE),
-        (subtitle, f3, 452 * P, accent),
-    ]:
-        w = dd.textlength(text, font=font)
-        dd.text(((W - w) / 2, y), text, font=font, fill=color)
+    f = ImageFont.truetype(FONT, 34 * P)
+    plh = sum(f.getmetrics())
+    ytop = 358 * P
+    for i, (text, color) in enumerate([
+        ("COMBAT EXTENDED", WHITE),
+        ("+ SIMPLE SIDEARMS", WHITE),
+        (subtitle, accent),
+    ]):
+        w = dd.textlength(text, font=f)
+        dd.text(((W - w) / 2, ytop + i * plh), text, font=f, fill=color)
 
     img.resize((512, 512), Image.LANCZOS).save(path)
     print("wrote", path)
@@ -189,7 +189,7 @@ if __name__ == "__main__":
     # cross-link with relative paths (personal tooling — skipped when absent).
     import shutil
     badge_set = ["Badge_Suite.png", "Badge_Patch.png", "Badge_Loadouts.png", "Badge_Tactics.png"]
-    for sibling in ("~/Projects/CESidearmsSupply",
+    for sibling in ("~/Projects/CombatExtended-SimpleSidearms-Compatibility-Loadouts",
                     "~/Projects/CombatExtended-SimpleSidearms-Compatibility-Tactics"):
         media = os.path.expanduser(sibling + "/Media")
         if os.path.isdir(media):
@@ -197,7 +197,7 @@ if __name__ == "__main__":
                 shutil.copy(os.path.join(HERE, name), os.path.join(media, name))
             print("distributed badges ->", media)
 
-    loadouts_about = os.path.expanduser("~/Projects/CESidearmsSupply/About")
+    loadouts_about = os.path.expanduser("~/Projects/CombatExtended-SimpleSidearms-Compatibility-Loadouts/About")
     if os.path.isdir(loadouts_about):
         render_preview(os.path.join(loadouts_about, "Preview.png"),
                        "LOADOUTS MODULE", (217, 154, 43, 255), rifle)
