@@ -88,6 +88,15 @@ identically every time.
 The other saves cover the other axes if a second clip is wanted: CETEST-1-pickup
 (bulk refusal), CETEST-4-generation (raider sidearms, one-use fallback).
 
+## Publishing (clean upload)
+
+RimWorld's uploader ships the WHOLE mod folder (no `.rwignore`; `SetItemContent`
+runs over the mod dir), so never upload the repo - it carries `Source/`, `test/`,
+`docs/`, `Media/`, etc. Run `./publish.sh` to stage an allowlisted clean copy (About
++ Assemblies + Defs/Patches/Languages as applicable + LICENSE/NOTICE) into a sibling
+`.publish/`, and upload that folder. After the first publish, copy the generated
+`About/PublishedFileId.txt` back into the repo.
+
 ## Versioning & save compatibility
 
 Semver tags, `v1.0.0` at first Workshop release.
