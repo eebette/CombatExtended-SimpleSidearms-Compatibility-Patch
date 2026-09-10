@@ -24,7 +24,7 @@ Artwork derived from the Combat Extended badge
     Media/Badge_Patch.png
     Media/Badge_Loadouts.png
     Media/Badge_Tactics.png
-    Media/Badge_LQ.png
+    Media/Badge_POWQ.png
     Media/badge_gen.py   (only insofar as it embeds and re-renders that artwork)
 
 These composites remix the rifle glyph from Badge_CE_compatible.png. As
