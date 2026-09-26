@@ -180,17 +180,20 @@ def render_preview(path, subtitle, accent, rifle):
 if __name__ == "__main__":
     rifle = extract_rifle()
     render(os.path.join(HERE, "Badge_Suite.png"), "COMPATIBILITY SUITE", None, rifle)
-    render(os.path.join(HERE, "Badge_Patch.png"), "COMPATIBILITY PATCH", (109, 143, 60, 255), rifle)
-    render(os.path.join(HERE, "Badge_Loadouts.png"), "LOADOUTS MODULE", (217, 154, 43, 255), rifle)
-    render(os.path.join(HERE, "Badge_Tactics.png"), "TACTICS MODULE", (176, 65, 62, 255), rifle)
+    render(os.path.join(HERE, "Badge_Patch.png"), "COMPATIBILITY PATCH", (196, 204, 218, 255), rifle)
+    render(os.path.join(HERE, "Badge_Loadouts.png"), "LOADOUTS MODULE", (72, 134, 202, 255), rifle)
+    render(os.path.join(HERE, "Badge_Tactics.png"), "TACTICS MODULE", (84, 142, 74, 255), rifle)
     render_preview(os.path.join(HERE, "..", "About", "Preview.png"),
-                   "COMPATIBILITY PATCH", (109, 143, 60, 255), rifle)
+                   "COMPATIBILITY PATCH", (196, 204, 218, 255), rifle)
     # Distribute the full badge set to sibling repos so their READMEs can
     # cross-link with relative paths (personal tooling — skipped when absent).
     import shutil
     badge_set = ["Badge_Suite.png", "Badge_Patch.png", "Badge_Loadouts.png", "Badge_Tactics.png"]
     for sibling in ("~/Projects/CombatExtended-SimpleSidearms-Compatibility-Loadouts",
-                    "~/Projects/CombatExtended-SimpleSidearms-Compatibility-Tactics"):
+                    "~/Projects/CombatExtended-SimpleSidearms-Compatibility-Tactics",
+                    "~/Projects/Better-Attack-Orders-for-Simple-Sidearms",
+                    "~/Projects/Pawns-Optimize-Weapon-Quality",
+                    "~/Projects/More-Mod-Patches-for-Expanded-Materials-Metals"):
         media = os.path.expanduser(sibling + "/Media")
         if os.path.isdir(media):
             for name in badge_set:
@@ -200,9 +203,9 @@ if __name__ == "__main__":
     loadouts_about = os.path.expanduser("~/Projects/CombatExtended-SimpleSidearms-Compatibility-Loadouts/About")
     if os.path.isdir(loadouts_about):
         render_preview(os.path.join(loadouts_about, "Preview.png"),
-                       "LOADOUTS MODULE", (217, 154, 43, 255), rifle)
+                       "LOADOUTS MODULE", (72, 134, 202, 255), rifle)
     tactics_about = os.path.expanduser(
         "~/Projects/CombatExtended-SimpleSidearms-Compatibility-Tactics/About")
     if os.path.isdir(tactics_about):
         render_preview(os.path.join(tactics_about, "Preview.png"),
-                       "TACTICS MODULE", (176, 65, 62, 255), rifle)
+                       "TACTICS MODULE", (84, 142, 74, 255), rifle)
